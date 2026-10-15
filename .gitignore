@@ -1,0 +1,29 @@
+# Data and generated outputs
+data/
+artifacts/
+reports/*
+!reports/figures/
+mlruns/
+mlartifacts/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.hypothesis/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Web
+web/node_modules/
+web/.next/
+web/out/
+
+# Secrets
+.env
+.env.*
+!.env.example
