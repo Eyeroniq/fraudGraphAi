@@ -20,6 +20,8 @@ from sklearn.metrics import average_precision_score
 from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.preprocessing import StandardScaler
 
+from fraudgraph.features.matrix import frame_to_matrix
+
 HOUR_FEATURE = "t_hour"
 KEY_COLUMNS = ("txn_id", "step", "split", "is_fraud")
 
@@ -41,16 +43,8 @@ def feature_sets(table: pl.DataFrame) -> dict[str, list[str]]:
 
 
 def matrix(table: pl.DataFrame, features: list[str], horizon_steps: int) -> np.ndarray:
-    """Features as float64, with model-agnostic fills for "no history" NaNs."""
-    filled = table.select(features).with_columns(
-        [
-            pl.col(c).fill_nan(float(horizon_steps + 1))
-            for c in features
-            if c == "o_steps_since_last"
-        ]
-        + [pl.col(c).fill_nan(0.0) for c in features if c == "o_amount_z"]
-    )
-    return filled.to_numpy().astype(np.float64)
+    """Features as float64, with the shared "no history" fills (features/matrix.py)."""
+    return frame_to_matrix(table, features, horizon_steps)
 
 
 def labels(table: pl.DataFrame) -> np.ndarray:

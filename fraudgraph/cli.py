@@ -464,6 +464,28 @@ def bundle_cmd(
     typer.echo(f"{path}")
 
 
+@app.command("all")
+def all_cmd(
+    fixture: Annotated[
+        bool, typer.Option(help="Run on the synthetic fixture instead of PaySim (CI).")
+    ] = False,
+    out: Annotated[Path, typer.Option(help="Bundle root for --fixture.")] = Path(
+        "artifacts/fixture_bundles"
+    ),
+) -> None:
+    """Whole Phase 1 pipeline. With --fixture: synthetic data -> bundle, no dataset needed."""
+    if not fixture:
+        typer.echo(
+            "Run the real pipeline step by step: data prepare, split, features build, "
+            "train baselines, evaluate, policy, bundle. `fgx all --fixture` builds a CI bundle.",
+            err=True,
+        )
+        raise typer.Exit(2)
+    from fraudgraph.pipeline import fixture_bundle
+
+    typer.echo(str(fixture_bundle(out)))
+
+
 @app.command("split")
 def split() -> None:
     """Choose time-based splits with the label-delay embargo -> data/processed/splits.json."""

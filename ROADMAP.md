@@ -75,8 +75,8 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | **1.4** | Evaluation harness (PR-AUC, recall@P, block bootstrap CIs) | ☑ 2026-10-21 · test AP lgbm_no_hour 0.197 [0.117, 0.295] (9 blocks); golden-number test pinned |
 | **1.5** | Cost model, calibration, cost-optimal threshold | ☑ 2026-10-21 · test cost: EC rule 130 M vs global 218 M vs approve-all 1,082 M; review 4.4 % ([policy](docs/policy.md)) |
 | **1.6** | MLflow tracking + model bundle format | ☑ 2026-10-21 · bundle `lgbm-2026.10.21-<sha>`: model, calibrator, policy, feature spec, reference stats, hashed manifest |
-| **2.1** | `Scorer` (pure-Python inference) + artifact bundle loader | ☐ |
-| **2.2** | FastAPI `/v1/score`, `/health`, `/ready` | ☐ |
+| **2.1** | `Scorer` (pure-Python inference) + artifact bundle loader | ☑ 2026-10-21 · online p equals offline backfill p (parity test); engine-version guard |
+| **2.2** | FastAPI `/v1/score`, `/health`, `/ready` | ☑ 2026-10-21 · idempotent on `txn_id`, 409 on out-of-order, error model; ~1 ms per score warm |
 | **2.3** | Dockerfile + compose (api only) + smoke test in CI | ☐ |
 | **2.4** | Minimal web page that calls `/v1/score` | ☐ |
 | **3.0** | Pre-register the graph comparison rule (in this file) | ☐ |
@@ -555,6 +555,7 @@ container → web page → CI. Everything later plugs into this.
 
 - **2.1** `serving/scorer.py`: loads a bundle, checks `feature_spec.engine_version`, `score(event) -> Decision`. Uses `InMemoryStore` for now.
 - **2.2** FastAPI `POST /v1/score`, `/health`, `/ready`, pydantic schemas from A7 (reasons may be empty for now).
+- *Built (2.1–2.2):* `fraudgraph/serving/scorer.py`, `services/api/{main,schemas}.py`. Fill rules for "no history" features live in `features/matrix.py`, shared by training and serving. `fgx all --fixture` builds a bundle from the synthetic data (used by the API tests and the CI smoke test).
 - **2.3** `docker/api.Dockerfile` (multi-stage, slim, non-root, healthcheck), `deploy/docker-compose.yml` with `api` only. CI job: build image → run → `curl /ready` → score 3 fixture txns.
 - **2.4** `web/`: Next.js scaffold with one page — a form → `/v1/score` → shows the decision.
 - *Done when:* `uv run poe up` and opening the page shows a decision for a typed transaction, and CI runs the smoke test.
