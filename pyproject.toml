@@ -7,16 +7,20 @@ requires-python = ">=3.12,<3.13"
 # Runtime dependencies shared by research, API and worker. Heavy research-only
 # libraries go in the `research` extra so the serving image stays slim (D5).
 dependencies = [
+    "lightgbm>=4.5",
     "pandera[polars]>=0.22",
     "polars>=1.20",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     "pyyaml>=6.0",
+    "scikit-learn>=1.5",
     "typer>=0.12",
 ]
 
 [project.optional-dependencies]
-research = []
+research = [
+    "matplotlib>=3.9",
+]
 
 [project.scripts]
 fgx = "fraudgraph.cli:app"
@@ -106,3 +110,7 @@ markers = [
 [tool.coverage.run]
 source = ["fraudgraph"]
 branch = true
+
+[[tool.mypy.overrides]]
+module = ["sklearn.*", "matplotlib.*"]
+ignore_missing_imports = true

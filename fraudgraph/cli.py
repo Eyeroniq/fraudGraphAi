@@ -103,5 +103,39 @@ def data_prepare(
     )
 
 
+@data_app.command("audit")
+def data_audit(
+    probe: Annotated[
+        bool, typer.Option(help="Also train quick LightGBM probes per column set (~5 min).")
+    ] = True,
+    figures_dir: Annotated[
+        Path, typer.Option(help="Where to write the PNG figures for docs/data_audit.md.")
+    ] = Path("docs/figures"),
+) -> None:
+    """Compute the data-audit numbers -> reports/audit/audit.json (+ figures)."""
+    import polars as pl
+
+    from fraudgraph.data.audit import probe_feature_sets, run_audit, write_figures
+    from fraudgraph.data.prepare import PARQUET_NAME
+
+    settings = get_settings()
+    parquet = settings.paths.data_dir / "processed" / PARQUET_NAME
+    if not parquet.is_file():
+        typer.echo(f"error: {parquet} not found; run `fgx data prepare` first.", err=True)
+        raise typer.Exit(1)
+
+    frame = pl.read_parquet(parquet)
+    audit = run_audit(frame)
+    if probe:
+        audit["probe"] = probe_feature_sets(frame, seed=settings.seed)
+
+    out = settings.paths.reports_dir / "audit" / "audit.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(audit, indent=2, default=str) + "\n", encoding="utf-8")
+    typer.echo(f"audit: {out}")
+    for path in write_figures(audit, figures_dir):
+        typer.echo(f"figure: {path}")
+
+
 if __name__ == "__main__":
     app()

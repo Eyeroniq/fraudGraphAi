@@ -66,7 +66,7 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 |---|---|---|
 | **0.1** | Repo skeleton, tooling (uv, ruff, mypy, pre-commit, poe tasks) | ☑ 2026-10-21 · `poe check` green (10 tests, mypy strict) |
 | **0.2** | Data download with checksum + pandera schema | ☑ 2026-10-21 · hash pinned; 6,362,620 rows / 8,213 fraud pass the schema |
-| **0.3** | EDA + leakage audit (`docs/data_audit.md`) | ☐ |
+| **0.3** | EDA + leakage audit (`docs/data_audit.md`) | ☑ 2026-10-21 · `amount == oldbalance_orig` alone AP 0.981; 5 plan changes proposed, awaiting sign-off |
 | **0.4** | Synthetic PaySim-schema fixture generator (for tests/CI) | ☐ |
 | **0.5** | CI skeleton (lint + unit tests) | ☐ |
 | **1.1** | Time-based splits with label-delay embargo | ☐ |
