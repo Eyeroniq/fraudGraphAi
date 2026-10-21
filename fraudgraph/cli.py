@@ -245,6 +245,65 @@ def train_baselines(
         )
 
 
+@app.command("evaluate")
+def evaluate_cmd(
+    predictions: Annotated[
+        Path, typer.Option(help="Predictions parquet with score_<model> columns.")
+    ] = Path("artifacts/baselines/predictions.parquet"),
+    run: Annotated[str, typer.Option(help="Report name under reports/eval/.")] = "baselines",
+    splits: Annotated[str, typer.Option(help="Comma-separated splits.")] = "test,late_test",
+    reference: Annotated[
+        str, typer.Option(help="Model the others are compared against (paired bootstrap).")
+    ] = "lgbm_no_hour",
+    alerts_per_day: Annotated[int, typer.Option(help="Review budget for precision@k.")] = 100,
+    resamples: Annotated[int, typer.Option(help="Bootstrap resamples.")] = 1_000,
+) -> None:
+    """Metrics with block-bootstrap CIs, paired AP differences and plots."""
+    import polars as pl
+
+    from fraudgraph.data.prepare import PARQUET_NAME
+    from fraudgraph.data.splits import load_plan
+    from fraudgraph.models.evaluate import run_evaluation, save_report, write_plots
+
+    settings = get_settings()
+    plan = load_plan(settings.paths.data_dir / "processed" / "splits.json")
+    frame = pl.read_parquet(predictions)
+    events = settings.paths.data_dir / "processed" / PARQUET_NAME
+    if "amount" not in frame.columns and events.is_file():
+        amounts = pl.read_parquet(events, columns=["txn_id", "amount"])
+        frame = frame.join(amounts, on="txn_id", how="left", maintain_order="left")
+
+    wanted = tuple(s.strip() for s in splits.split(",") if s.strip())
+    report = run_evaluation(
+        frame,
+        splits=wanted,
+        block_steps=plan.bootstrap_block_steps,
+        reference=reference,
+        alerts_per_day=alerts_per_day,
+        resamples=resamples,
+        seed=settings.seed,
+    )
+    out_dir = settings.paths.reports_dir / "eval" / run
+    path = save_report(report, out_dir)
+    for split in wanted:
+        write_plots(frame, split, plan.bootstrap_block_steps, out_dir)
+    typer.echo(f"{path}")
+    for split, data in report["splits"].items():
+        typer.echo(
+            f"\n{split}: {data['rows']:,} rows, {data['fraud']} fraud, {data['blocks']} blocks"
+        )
+        typer.echo(f"{'model':<18} {'AP':>7} {'95% CI':>17} {'R@P0.8':>7} {'P@k':>6}")
+        for name, m in data["models"].items():
+            lo, hi = m["ap"]["ci95"]
+            typer.echo(
+                f"{name:<18} {m['ap']['value']:>7.4f} [{lo:>6.4f}, {hi:>6.4f}] "
+                f"{m['recall_at_p0.8']['value']:>7.3f} {m['precision_at_k']['value']:>6.3f}"
+            )
+        for pair, d in data["paired_ap_vs_reference"].items():
+            lo, hi = d["ci95"]
+            typer.echo(f"  dAP {pair:<34} {d['delta_ap']:+.4f} [{lo:+.4f}, {hi:+.4f}]")
+
+
 @app.command("split")
 def split() -> None:
     """Choose time-based splits with the label-delay embargo -> data/processed/splits.json."""

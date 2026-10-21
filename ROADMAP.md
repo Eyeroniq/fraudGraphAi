@@ -72,7 +72,7 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | **1.1** | Time-based splits with label-delay embargo | ☑ 2026-10-21 · test = steps 356–408 (626 fraud, 2.2 days → 6-step bootstrap blocks); late test 3,624 fraud |
 | **1.2** | Decision-time tabular features | ☑ 2026-10-21 · 13 T+O features, backfill 6.36 M events in 107 s; origin history on 0.09 % of rows |
 | **1.3** | Baselines: rule, logistic regression, LightGBM | ☑ 2026-10-21 · test AP: lgbm 0.357 (no hour 0.197), logreg 0.040, rule 0.005; prevalence 0.17 % |
-| **1.4** | Evaluation harness (PR-AUC, recall@P, block bootstrap CIs) | ☐ |
+| **1.4** | Evaluation harness (PR-AUC, recall@P, block bootstrap CIs) | ☑ 2026-10-21 · test AP lgbm_no_hour 0.197 [0.117, 0.295] (9 blocks); golden-number test pinned |
 | **1.5** | Cost model, calibration, cost-optimal threshold | ☐ |
 | **1.6** | MLflow tracking + model bundle format | ☐ |
 | **2.1** | `Scorer` (pure-Python inference) + artifact bundle loader | ☐ |
@@ -532,6 +532,7 @@ The project `.gitignore` only lists project artifacts (`data/`, `reports/`, `art
 - Uncertainty: **block bootstrap by 24-step days** (1 000 resamples) → 95 % CIs. Paired bootstrap for model-vs-model differences.
 - Plots: PR curves with CI bands, cost vs threshold, calibration (reliability) curve.
 - *Done when:* one command produces `reports/eval/<run>/` (JSON + PNG) for any model, and a golden-number test on the fixture locks the metric code.
+- *Built:* `fgx evaluate` (any predictions file with `score_<model>` columns). Block resampling is done as per-row weights over rows sorted once (verified against sklearn with ties and weights). Precision@k uses a review budget of k alerts/day, spread per block. Cost metrics plug in with 1.5's policy.
 
 **1.5 Cost model, calibration & threshold**
 - Isotonic calibration on `calib_a` (Platt as a comparison); report Brier and ECE.
