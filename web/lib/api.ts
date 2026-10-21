@@ -2,7 +2,8 @@
 // are generated from the OpenAPI schema instead of written by hand.
 
 export type TxnType = "CASH_IN" | "CASH_OUT" | "DEBIT" | "PAYMENT" | "TRANSFER";
-export type Action = "APPROVE" | "REVIEW" | "BLOCK";
+export type Action = "APPROVE" | "STEP_UP" | "REVIEW" | "BLOCK";
+export type SetLabel = "legit" | "fraud";
 
 export interface ScoreRequest {
   txn_id: string;
@@ -19,7 +20,8 @@ export interface ScoreResponse {
   p_fraud: number;
   decision: Action;
   decision_reason: string;
-  expected_cost: Record<Action, number>;
+  expected_cost: Partial<Record<Action, number>>;
+  prediction_set: SetLabel[] | null;
   reasons: { code: string; text: string; impact: number }[];
   latency_ms: number;
 }

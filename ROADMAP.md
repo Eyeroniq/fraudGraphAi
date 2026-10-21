@@ -86,9 +86,9 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | **3.4** | PyG graph build + temporal GraphSAGE/GINE edge classifier | ☑ 2026-10-21 · causal neighbourhood GNN (GINE chosen); test AP 0.144, below E0 |
 | **3.5** | Hybrid: GNN embeddings → LightGBM | ☑ 2026-10-21 · out-of-fold embeddings with embargo; AP 0.484 but cost and late period worse than E1 |
 | **3.6** | Experiment matrix (3 seeds) + honest verdict (`docs/graph_study.md`) | ☑ 2026-10-21 · **E1 wins**: ΔAP +0.133 [+0.088, +0.157], Δcost −66 M; fails on injected rings (E4) |
-| **4.1** | MAPIE split conformal (marginal + class-conditional) | ☐ |
-| **4.2** | Three-way decision policy + review capacity | ☐ |
-| **4.3** | Coverage over time + review-load analysis | ☐ |
+| **4.1** | MAPIE split conformal (marginal + class-conditional) | ☑ 2026-10-21 · Mondrian LAC: fraud coverage 0.805 at α = 0.2 (target 0.80); marginal covers 27 % of fraud |
+| **4.2** | Three-way decision policy + review capacity | ☑ 2026-10-21 · + STEP_UP (J3); test cost 66.3 M with conformal + capacity vs 153.8 M global threshold |
+| **4.3** | Coverage over time + review-load analysis | ☑ 2026-10-21 · late period: fraud coverage holds (0.79–0.87), legit breaks ([conformal.md](docs/conformal.md)) |
 | **5.1** | SHAP TreeExplainer + grouped reason codes | ☐ |
 | **5.2** | Stability: seed, perturbation, background sensitivity | ☐ |
 | **5.3** | Quantus: robustness, faithfulness, randomisation | ☐ |
@@ -127,6 +127,7 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | 2026-10-21 | From the [data audit](docs/data_audit.md): D2 now excludes the sender balance too; model splits inside steps 1–408 with 409–743 as late-period test; G1-a (destination novelty) is the core graph family, O and G1-b expected weak, `cash_out_after_transfer` dropped; hour-of-day ablation required; B-rule = new destination. |
 | 2026-10-21 | A6 costs rescaled to PaySim amounts: `c_review` 5 → 2,000, `c_friction` 50 → 20,000 (the old values review 71–99 % of traffic). Champion = `lgbm` (hour allowed, ablation always reported). |
 | 2026-10-21 | Graph study: E1 (T+O+G1) wins by the pre-registered rule; GNN (E3) loses and the hybrid (E2) adds no robust gain beyond G1; E1 fails on injected mule rings (E4). Champion candidate for 7.5: E1 without G1-b (servable before `/v1/labels`). |
+| 2026-10-21 | Phase 4: champion is `lgbm_g1` (graph features, no G1-b); STEP_UP action added (Juspay J3); conformal defaults α = 0.2, uncertain → STEP_UP, 2,000 reviews/day; Juspay track J1–J4 added. |
 
 ---
 
@@ -291,13 +292,14 @@ Calibrated `p = P(fraud | x)`, amount `a`, and costs from `configs/base.yaml` (`
 | APPROVE | 0 | `a` (loss) |
 | REVIEW | `c_review` (default **2,000**; was 5) | `c_review + (1 − r)·a` (r = analyst catch rate, default 0.9) |
 | BLOCK | `c_friction` (default **20,000**; was 50, churn/complaint) | `c_block` (default 0) |
+| STEP_UP *(J3, 4.2)* | `c_step_up` (default 200, OTP / 3DS friction) | `c_step_up + (1 − r_step)·a` (r_step = challenge stop rate, default 0.7) |
 
 Costs are in PaySim currency units, so they must be on the scale of the amounts (median legit transfer ≈ 168k). At 5 / 50 the policy reviews 71–99 % of transactions; see [docs/policy.md](docs/policy.md).
 
 1. **Expected-cost rule:** pick the action with the lowest `E[cost] = (1−p)·cost_legit + p·cost_fraud`.
    This is a *per-transaction* threshold that depends on the amount.
 2. **Conformal override:** the prediction set at level `1−α` (class-conditional):
-   `{legit}` → keep the rule's action · `{fraud}` → at least REVIEW · `{legit, fraud}` or `{}` → **REVIEW** with reason *"model uncertain"*.
+   `{legit}` → keep the rule's action · `{fraud}` → at least REVIEW · `{legit, fraud}` or `{}` → at least `uncertain_action` (REVIEW or **STEP_UP**, default STEP_UP) with reason *"model uncertain"*. "At least" uses APPROVE < STEP_UP < REVIEW < BLOCK, so a BLOCK is never softened.
 3. **Capacity:** if REVIEW volume in the current 24 h window is over `review_capacity`, rank pending
    reviews by `expected savings = E[cost|APPROVE] − E[cost|REVIEW]`. Overflow drops to the
    cheapest non-review action. This is logged so we can measure what the capacity limit costs.
@@ -639,11 +641,14 @@ on plain PaySim (quite possible given the origin-ID sparsity), say so and show E
 **4.2 Policy** — implement A6 (`decision/policy.py`): expected-cost action → conformal override → capacity.
 Unit-test every branch, including the empty set.
 
+- *Built (4.1–4.2):* `decision/conformal.py` (LAC/APS, marginal + Mondrian, finite-sample quantiles, checked against MAPIE 1.6 on the marginal case), `decision/policy.py` (batch + online, first-come and oracle capacity), STEP_UP in `decision/costs.py`. The policy runs on the graph champion `lgbm_g1` (`fgx train champion`). APS is degenerate for binary non-randomised sets (always both classes), so LAC is used.
+
 **4.3 Analysis** → `docs/conformal.md`
 - Empirical coverage per class on test, **per day** (exchangeability breaks under drift — show it).
 - Review load vs α; cost of the full policy vs cost-rule-only vs global threshold.
 - "Uncertain" cases: what fraction are actually fraud? (They should be much riskier than APPROVE and much less certain than BLOCK.)
 - *Done when:* fraud-class coverage on test is within ±2 pp of `1−α` on the stable period, and the deviation under drift is documented.
+- *Result:* met at α = 0.2 (0.805) and α = 0.1 (0.914); α = 0.05 over-covers (0.976). The guarantee costs money (+11 % at the recommended α = 0.2, uncertain → STEP_UP, 2,000 reviews/day) rather than saving it; STEP_UP is the main cost win (71.3 M → 59.8 M).
 
 ## Phase 5 — Explainability & explanation quality
 
@@ -779,6 +784,18 @@ limits on. Backup the Postgres volume. `deploy/README.md` gives the runbook (dep
 
 - **10.1 README:** one-paragraph pitch, architecture diagram, **results table** (baseline vs graph with CIs and the verdict), cost savings, conformal coverage, drift study headline, "how to reproduce in 3 commands", limitations (simulated data, the PaySim balance artifact, ID sparsity). Model card in `docs/model_card.md`.
 - **10.2 Demo:** a 2-minute script — live monitor → inject D3 → alarms fire → open an uncertain case → SHAP + ego-graph → resolve → challenger catches up → promote. Record a GIF/video. Optional blog post: *"Did the graph help? An honest answer."*
+
+## Juspay track (payment-switch fit)
+
+Added 2026-10-21 so the project reads as payment infrastructure, not only fraud ML. Each item
+lands in the phase where it belongs.
+
+| ID | Item | Phase | Status |
+|---|---|---|---|
+| **J1** | Framing: a pre-authorisation risk hook for a payment switch; latency first; costs read as ₹ | README, docs | ☑ 2026-10-21 |
+| **J2** | UPI-style scenario: VPA-like accounts, P2P / P2M / collect-request flows, mule VPAs receiving many small transfers then cashing out — check whether the destination features catch them | 6.2 (scenario D6) | ☐ |
+| **J3** | `STEP_UP` action (OTP / 3DS challenge) between APPROVE and REVIEW | 4.2 | ☑ 2026-10-21 · EC rule 71.3 M → 59.8 M |
+| **J4** | Rust client for `/v1/score` + a demo of calling it from a Hyperswitch-style fraud-risk (FRM) hook | 7.3 | ☐ |
 
 ## Stretch goals
 

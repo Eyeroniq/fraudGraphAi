@@ -8,7 +8,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 TxnType = Literal["CASH_IN", "CASH_OUT", "DEBIT", "PAYMENT", "TRANSFER"]
-Action = Literal["APPROVE", "REVIEW", "BLOCK"]
+Action = Literal["APPROVE", "STEP_UP", "REVIEW", "BLOCK"]
+SetLabel = Literal["legit", "fraud"]
 
 
 class ScoreRequest(BaseModel):
@@ -38,6 +39,10 @@ class ScoreResponse(BaseModel):
     decision: Action
     decision_reason: str
     expected_cost: dict[str, float]
+    prediction_set: list[SetLabel] | None = Field(
+        default=None,
+        description='Conformal set: ["legit"], ["fraud"], both ("model uncertain") or [] (empty).',
+    )
     reasons: list[Reason] = []
     latency_ms: float
 

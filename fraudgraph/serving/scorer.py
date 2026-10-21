@@ -17,7 +17,10 @@ import joblib
 import lightgbm as lgb
 import numpy as np
 
+from fraudgraph.decision import conformal
+from fraudgraph.decision.conformal import CLASSES
 from fraudgraph.decision.costs import ACTIONS, CostParams, expected_costs
+from fraudgraph.decision.policy import OnlinePolicy, PolicyConfig
 from fraudgraph.features.engine import FeatureEngine
 from fraudgraph.features.matrix import row_to_vector
 from fraudgraph.features.spec import ENGINE_VERSION, Event, FeatureSpec
@@ -39,6 +42,7 @@ class Decision:
     decision: str
     decision_reason: str
     expected_cost: dict[str, float]
+    prediction_set: list[str] | None = None  # conformal set; None without a conformal model
     reasons: list[dict[str, Any]] = field(default_factory=list)
     latency_ms: float = 0.0
 
@@ -67,6 +71,16 @@ class Scorer:
         self.calibrator = joblib.load(bundle_dir / "calibrator.joblib")
         policy = json.loads((bundle_dir / "policy.json").read_text(encoding="utf-8"))
         self.costs = CostParams(**policy["costs"])
+        conformal_path = bundle_dir / "conformal.json"
+        self.conformal = conformal.load(conformal_path) if conformal_path.is_file() else None
+        self.policy = OnlinePolicy(
+            PolicyConfig(
+                costs=self.costs,
+                conformal=self.conformal,
+                uncertain_action=ACTIONS.index(policy.get("uncertain_action", "REVIEW")),
+                review_capacity_per_day=policy.get("review_capacity_per_day"),
+            )
+        )
         self.engine = FeatureEngine(self.spec, store or InMemoryStore(self.spec.horizon_steps))
         missing = set(self.features) - set(self.engine.feature_names)
         if missing:
@@ -84,11 +98,7 @@ class Scorer:
                 p_fraud=0.0,
                 decision="APPROVE",
                 decision_reason="type_not_modelled",
-                expected_cost={
-                    "APPROVE": 0.0,
-                    "REVIEW": self.costs.c_review,
-                    "BLOCK": self.costs.c_friction,
-                },
+                expected_cost=self._cost_dict(np.zeros(1), np.array([event.amount])),
             )
         if apply:
             self.engine.apply(event)
@@ -103,13 +113,21 @@ class Scorer:
 
     def _decide(self, event: Event) -> Decision:
         p = self.probability(event)
-        costs = expected_costs(np.array([p]), np.array([event.amount]), self.costs)[0]
-        action = int(np.argmin(costs))
+        action, reason, sets = self.policy.decide(p, event.amount, event.step)
+        prediction_set = (
+            None if sets is None else [c for c, inside in zip(CLASSES, sets, strict=True) if inside]
+        )
         return Decision(
             txn_id=event.txn_id,
             model_version=self.version,
             p_fraud=p,
             decision=ACTIONS[action],
-            decision_reason="expected_cost",
-            expected_cost={a: round(float(c), 4) for a, c in zip(ACTIONS, costs, strict=True)},
+            decision_reason=reason,
+            expected_cost=self._cost_dict(np.array([p]), np.array([event.amount])),
+            prediction_set=prediction_set,
         )
+
+    def _cost_dict(self, p: np.ndarray, amount: np.ndarray) -> dict[str, float]:
+        """Expected cost of every enabled action (disabled ones are left out, not inf)."""
+        costs = expected_costs(p, amount, self.costs)[0]
+        return {ACTIONS[a]: round(float(costs[a]), 4) for a in self.costs.enabled_actions()}

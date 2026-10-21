@@ -64,6 +64,7 @@ def write_bundle(
     policy_path: Path,
     feature_spec: dict[str, Any],
     train_features: pl.DataFrame,
+    conformal_path: Path | None = None,
     metrics: dict[str, Any],
     data_sha256: str,
     git_sha: str,
@@ -80,6 +81,8 @@ def write_bundle(
     shutil.copyfile(booster_path, target / "model.txt")
     shutil.copyfile(calibrator_path, target / "calibrator.joblib")
     shutil.copyfile(policy_path, target / "policy.json")
+    if conformal_path is not None and conformal_path.is_file():
+        shutil.copyfile(conformal_path, target / "conformal.json")
     _write_json(target / "feature_spec.json", feature_spec)
     _write_json(target / "reference_stats.json", reference_stats(train_features, features))
 

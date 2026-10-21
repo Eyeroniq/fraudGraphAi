@@ -1,10 +1,15 @@
 """The money-based cost model (A6) and the decisions made from it (task 1.5).
 
-| action  | cost if legit | cost if fraud               |
-|---------|---------------|-----------------------------|
-| APPROVE | 0             | a                           |
-| REVIEW  | c_review      | c_review + (1 - r) * a      |
-| BLOCK   | c_friction    | c_block                     |
+| action  | cost if legit | cost if fraud                   |
+|---------|---------------|---------------------------------|
+| APPROVE | 0             | a                               |
+| REVIEW  | c_review      | c_review + (1 - r) * a          |
+| BLOCK   | c_friction    | c_block                         |
+| STEP_UP | c_step_up     | c_step_up + (1 - r_step) * a    |
+
+STEP_UP (task 4.2, Juspay track J3) challenges the customer (OTP / 3DS) instead of
+sending the payment to a human: much cheaper for a legit customer than a review, but
+it stops less fraud. It is off unless `step_up_enabled`.
 
 Everything is vectorised over rows: `a` is the transaction amount.
 """
@@ -15,8 +20,10 @@ from dataclasses import asdict, dataclass
 
 import numpy as np
 
-ACTIONS = ("APPROVE", "REVIEW", "BLOCK")
-APPROVE, REVIEW, BLOCK = 0, 1, 2
+ACTIONS = ("APPROVE", "REVIEW", "BLOCK", "STEP_UP")
+APPROVE, REVIEW, BLOCK, STEP_UP = 0, 1, 2, 3
+# How strongly an action interferes with the payment (for "at least X" overrides).
+SEVERITY = {APPROVE: 0, STEP_UP: 1, REVIEW: 2, BLOCK: 3}
 
 
 @dataclass(frozen=True)
@@ -25,30 +32,43 @@ class CostParams:
     c_friction: float = 50.0
     catch_rate: float = 0.9  # r: share of reviewed fraud an analyst stops
     c_block: float = 0.0
+    step_up_enabled: bool = False
+    c_step_up: float = 200.0  # OTP / 3DS friction and abandonment for a legit customer
+    step_up_catch_rate: float = 0.7  # share of fraud a step-up challenge stops
+
+    def enabled_actions(self) -> tuple[int, ...]:
+        return (
+            (APPROVE, REVIEW, BLOCK, STEP_UP) if self.step_up_enabled else (APPROVE, REVIEW, BLOCK)
+        )
 
     def scaled(self, **factors: float) -> CostParams:
         values = asdict(self)
         for name, factor in factors.items():
-            values[name] *= factor
+            values[name] = values[name] * factor
         return CostParams(**values)
 
 
 def cost_table(amount: np.ndarray, costs: CostParams) -> tuple[np.ndarray, np.ndarray]:
-    """(cost_if_legit, cost_if_fraud), each shaped [rows, 3 actions]."""
+    """(cost_if_legit, cost_if_fraud), each shaped [rows, 4 actions]."""
     n = len(amount)
-    legit = np.empty((n, 3))
-    fraud = np.empty((n, 3))
+    legit = np.empty((n, len(ACTIONS)))
+    fraud = np.empty((n, len(ACTIONS)))
     legit[:, APPROVE], fraud[:, APPROVE] = 0.0, amount
     legit[:, REVIEW] = costs.c_review
     fraud[:, REVIEW] = costs.c_review + (1.0 - costs.catch_rate) * amount
     legit[:, BLOCK], fraud[:, BLOCK] = costs.c_friction, costs.c_block
+    legit[:, STEP_UP] = costs.c_step_up
+    fraud[:, STEP_UP] = costs.c_step_up + (1.0 - costs.step_up_catch_rate) * amount
     return legit, fraud
 
 
 def expected_costs(p: np.ndarray, amount: np.ndarray, costs: CostParams) -> np.ndarray:
-    """E[cost] per action, shape [rows, 3]."""
+    """E[cost] per action, shape [rows, 4]; disabled actions are +inf (never chosen)."""
     legit, fraud = cost_table(amount, costs)
-    return np.asarray((1.0 - p)[:, None] * legit + p[:, None] * fraud)
+    expected = np.asarray((1.0 - p)[:, None] * legit + p[:, None] * fraud)
+    if not costs.step_up_enabled:
+        expected[:, STEP_UP] = np.inf
+    return expected
 
 
 def expected_cost_decisions(p: np.ndarray, amount: np.ndarray, costs: CostParams) -> np.ndarray:

@@ -452,6 +452,7 @@ def bundle_cmd(
         booster_path=needed["booster"],
         calibrator_path=needed["calibrator"],
         policy_path=needed["policy"],
+        conformal_path=arts / "policy" / name / "conformal.json",
         feature_spec=json.loads(needed["spec"].read_text(encoding="utf-8")),
         train_features=train,
         metrics=metrics,
@@ -519,6 +520,120 @@ def graph_study_cmd(
     typer.echo(f"{out}")
     for name, verdict_text in results["verdicts"].items():
         typer.echo(f"{name}: {verdict_text}")
+
+
+@train_app.command("champion")
+def train_champion_cmd(
+    trials: Annotated[int, typer.Option(help="LightGBM random-search trials.")] = 20,
+) -> None:
+    """Fit the graph champion `lgbm_g1` (T+O+G1 minus G1-b) next to the baselines."""
+    import polars as pl
+
+    from fraudgraph.data.prepare import PARQUET_NAME
+    from fraudgraph.data.splits import load_plan
+    from fraudgraph.features.spec import FeatureSpec
+    from fraudgraph.models.train import train_champion, training_table
+    from fraudgraph.tracking import tracked_run
+
+    settings = get_settings()
+    data, out = settings.paths.data_dir, settings.paths.artifacts_dir / "baselines"
+    horizon = FeatureSpec().horizon_steps
+    table = training_table(
+        pl.read_parquet(data / "processed" / PARQUET_NAME, columns=["txn_id", "step", "name_dest"]),
+        pl.read_parquet(data / "features" / "tabular.parquet"),
+        load_plan(data / "processed" / "splits.json"),
+        horizon,
+    )
+    result, scores, booster = train_champion(
+        table, horizon_steps=horizon, trials=trials, seed=settings.seed
+    )
+    booster.save_model(str(out / "lgbm_g1.txt"), num_iteration=booster.best_iteration)
+    predictions_path = out / "predictions.parquet"
+    predictions = pl.read_parquet(predictions_path)
+    scored = table.filter(
+        pl.col("split").is_in(["train_val", "calib_a", "calib_b", "test", "late_test"])
+    )
+    new = scored.select("txn_id").with_columns(score_lgbm_g1=pl.Series(scores))
+    predictions = predictions.drop("score_lgbm_g1", strict=False).join(
+        new, on="txn_id", how="left", maintain_order="left"
+    )
+    predictions.write_parquet(predictions_path, compression="zstd")
+    with tracked_run("champion-lgbm_g1", data_sha256=_data_sha256(), task="4.0") as tracker:
+        tracker.params({"trials": trials, "features": len(result.features)})
+        tracker.metrics({"val_ap": result.val_ap})
+    typer.echo(
+        f"lgbm_g1: val AP {result.val_ap:.4f} ({result.seconds:.0f}s), "
+        f"{len(result.features)} features"
+    )
+
+
+@app.command("conformal")
+def conformal_cmd(
+    model: Annotated[str | None, typer.Option(help="Model (default: champion).")] = None,
+    predictions: Annotated[Path, typer.Option(help="Predictions parquet.")] = Path(
+        "artifacts/baselines/predictions.parquet"
+    ),
+    resamples: Annotated[int, typer.Option(help="Bootstrap resamples for cost CIs.")] = 1_000,
+) -> None:
+    """Conformalise on calib_b, compare full policies on test, check coverage over time."""
+    import polars as pl
+
+    from fraudgraph.data.prepare import PARQUET_NAME
+    from fraudgraph.data.splits import load_plan
+    from fraudgraph.decision import conformal_report
+    from fraudgraph.decision.costs import CostParams
+    from fraudgraph.tracking import tracked_run
+
+    settings = get_settings()
+    name = model or settings.champion
+    plan = load_plan(settings.paths.data_dir / "processed" / "splits.json")
+    frame = pl.read_parquet(predictions).join(
+        pl.read_parquet(
+            settings.paths.data_dir / "processed" / PARQUET_NAME, columns=["txn_id", "amount"]
+        ),
+        on="txn_id",
+        how="left",
+        maintain_order="left",
+    )
+    pol = settings.policy
+    calibrator, chosen, policy, report = conformal_report.run(
+        frame,
+        name,
+        CostParams(**settings.costs.model_dump()),
+        alpha=pol.alpha,
+        score=pol.conformal_score,
+        mondrian=pol.mondrian,
+        uncertain_action=pol.uncertain_action,
+        capacity=pol.review_capacity_per_day,
+        block_steps=plan.bootstrap_block_steps,
+        resamples=resamples,
+        seed=settings.seed,
+    )
+    out = settings.paths.artifacts_dir / "policy" / name
+    report_dir = settings.paths.reports_dir / "eval" / f"conformal_{name}"
+    conformal_report.save(out, report_dir, calibrator, chosen, policy, report)
+    conformal_report.write_plots(report, report_dir)
+    with tracked_run(f"conformal-{name}", data_sha256=_data_sha256(), task="4") as tracker:
+        tracker.params(
+            {"model": name, **policy["conformal"], "capacity": pol.review_capacity_per_day}
+        )
+        tracker.metrics({"test_fraud_coverage": report["done_when"]["test_fraud_coverage"]})
+        tracker.artifact(report_dir / "report.json")
+
+    done = report["done_when"]
+    typer.echo(f"{out}")
+    typer.echo(
+        f"fraud coverage on test {done['test_fraud_coverage']:.3f} vs target {done['target']:.2f} "
+        f"-> {'OK' if done['within_2pp'] else 'OUTSIDE 2pp'}"
+    )
+    for rule, r in report["policies_test"].items():
+        lo, hi = r["cost"]["ci95"]
+        shares = r["action_share"]
+        typer.echo(
+            f"{rule:<38} {r['cost']['total'] / 1e6:>7.1f}M [{lo / 1e6:>6.1f}, {hi / 1e6:>6.1f}]  "
+            f"review {shares['REVIEW']:.2%} step-up {shares['STEP_UP']:.2%} "
+            f"block {shares['BLOCK']:.2%}"
+        )
 
 
 @app.command("split")

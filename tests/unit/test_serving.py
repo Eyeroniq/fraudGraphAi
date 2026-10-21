@@ -54,9 +54,12 @@ def test_decision_has_expected_cost_for_every_action(bundle: Path, events: list[
     modelled = next(e for e in events if e.type in MODELLED_TYPES)
     decision = scorer.score(modelled)
 
-    assert decision.decision in {"APPROVE", "REVIEW", "BLOCK"}
-    assert set(decision.expected_cost) == {"APPROVE", "REVIEW", "BLOCK"}
-    assert decision.expected_cost[decision.decision] == min(decision.expected_cost.values())
+    assert decision.decision in {"APPROVE", "STEP_UP", "REVIEW", "BLOCK"}
+    assert set(decision.expected_cost) == {"APPROVE", "REVIEW", "BLOCK", "STEP_UP"}
+    if decision.decision_reason == "expected_cost":  # no conformal override or capacity
+        assert decision.expected_cost[decision.decision] == min(decision.expected_cost.values())
+    assert decision.prediction_set is not None
+    assert set(decision.prediction_set) <= {"legit", "fraud"}
     assert 0.0 <= decision.p_fraud <= 1.0
     assert decision.model_version == bundle.name
 
@@ -124,6 +127,13 @@ def test_score_returns_a_decision(client: TestClient) -> None:
     assert body["decision"] in {"APPROVE", "REVIEW", "BLOCK"}
     assert body["reasons"] == []
     assert body["latency_ms"] >= 0
+    assert isinstance(body["prediction_set"], list)
+    assert body["decision_reason"] in {
+        "expected_cost",
+        "conformal_fraud",
+        "model_uncertain",
+        "capacity_overflow",
+    }
 
 
 def test_score_is_idempotent_on_txn_id(client: TestClient) -> None:
@@ -205,3 +215,15 @@ def test_engine_compatibility_rule(bundle_version: str, ok: bool) -> None:
     else:
         with pytest.raises(BundleMismatchError):
             check_engine_compatible(bundle_version, "1.3.0")
+
+
+def test_uncertain_set_routes_to_review(bundle: Path, events: list[Event]) -> None:
+    """Whatever the cost rule says, an uncertain conformal set never ends in APPROVE."""
+    scorer = Scorer(bundle)
+    seen = 0
+    for ev in events[:6_000]:
+        decision = scorer.score(ev)
+        if decision.prediction_set is not None and len(decision.prediction_set) != 1:
+            assert decision.decision in {"REVIEW", "BLOCK"}
+            seen += 1
+    assert seen > 0

@@ -50,7 +50,7 @@ def main(base: str, timeout_s: float = 120.0) -> int:
     for event in EVENTS:
         status, body = call(f"{base}/v1/score", event)
         print(f"{event['txn_id']}: {status} {body}")
-        if status != 200 or body.get("decision") not in {"APPROVE", "REVIEW", "BLOCK"}:
+        if status != 200 or body.get("decision") not in {"APPROVE", "STEP_UP", "REVIEW", "BLOCK"}:
             return 1
     return 0
 

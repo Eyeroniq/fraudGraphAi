@@ -17,6 +17,7 @@ from fraudgraph.config import SplitSettings
 from fraudgraph.data.prepare import to_canonical
 from fraudgraph.data.splits import assign_split, plan_splits
 from fraudgraph.data.synth import SynthConfig, generate
+from fraudgraph.decision import conformal
 from fraudgraph.decision.costs import CostParams, best_global_threshold
 from fraudgraph.features.backfill import backfill
 from fraudgraph.features.spec import FeatureSpec
@@ -34,6 +35,8 @@ def build_bundle(
     costs: CostParams,
     trials: int = 3,
     seed: int = 0,
+    alpha: float = 0.1,
+    review_capacity_per_day: int | None = None,
     model_name: str = "lgbm",
     git_sha: str = "fixture",
     data_sha256: str = "fixture",
@@ -42,7 +45,10 @@ def build_bundle(
     features, _ = backfill(events, spec)
     plan = plan_splits(events, split_settings, label_delay_steps)
     table = assign_split(features, plan)
-    parts = {s: table.filter(pl.col("split") == s) for s in ("train_fit", "train_val", "calib_a")}
+    parts = {
+        s: table.filter(pl.col("split") == s)
+        for s in ("train_fit", "train_val", "calib_a", "calib_b")
+    }
     names = feature_sets(table)["" if model_name == "lgbm" else "_no_hour"]
     x = {s: matrix(t, names, spec.horizon_steps) for s, t in parts.items()}
     y = {s: labels(t) for s, t in parts.items()}
@@ -69,17 +75,26 @@ def build_bundle(
         .to_numpy()
     )
     threshold, _ = best_global_threshold(calib_p, y["calib_a"], amount, costs)
+    conformal_model = conformal.fit(
+        calibrator(np.asarray(booster.predict(x["calib_b"], num_iteration=booster.best_iteration))),
+        y["calib_b"],
+        alpha=alpha,
+    )
 
     work = out_root / "_work"
     work.mkdir(parents=True, exist_ok=True)
     booster.save_model(str(work / "model.txt"), num_iteration=booster.best_iteration)
     joblib.dump(calibrator, work / "calibrator.joblib")
+    conformal.save(conformal_model, work / "conformal.json")
     policy = {
         "model": model_name,
         "calibration": "isotonic",
         "costs": costs.__dict__,
         "rule": "expected_cost",
         "global_threshold": threshold,
+        "conformal": {"alpha": alpha, "score": "lac", "mondrian": True},
+        "uncertain_action": "REVIEW",
+        "review_capacity_per_day": review_capacity_per_day,
         "calib_prevalence": float(y["calib_a"].mean()),
     }
     (work / "policy.json").write_text(json.dumps(policy, indent=2), encoding="utf-8")
@@ -95,6 +110,7 @@ def build_bundle(
         booster_path=work / "model.txt",
         calibrator_path=work / "calibrator.joblib",
         policy_path=work / "policy.json",
+        conformal_path=work / "conformal.json",
         feature_spec=feature_spec,
         train_features=parts["train_fit"],
         metrics={"source": "synthetic fixture"},
@@ -112,6 +128,6 @@ def fixture_bundle(out_root: Path, *, seed: int = 7, trials: int = 3) -> Path:
         out_root,
         split_settings=SplitSettings(dense_last_step=(cfg.days - cfg.sparse_days) * 24),
         label_delay_steps=12,
-        costs=CostParams(c_review=2_000.0, c_friction=20_000.0),
+        costs=CostParams(c_review=2_000.0, c_friction=20_000.0, step_up_enabled=True),
         trials=trials,
     )

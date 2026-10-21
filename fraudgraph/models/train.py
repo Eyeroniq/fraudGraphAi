@@ -141,3 +141,41 @@ def save(
         "results": [asdict(r) for r in results],
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+
+
+CHAMPION_EXCLUDED = ("g_dest_known_fraud_in",)  # needs online labels (7.3), see graph_study.md
+
+
+def champion_features(table: pl.DataFrame) -> list[str]:
+    """T+O+G1 minus the label-dependent G1-b feature: the 3.6 winner that is servable now."""
+    return [
+        c for c in table.columns if c.startswith(("t_", "o_", "g_")) and c not in CHAMPION_EXCLUDED
+    ]
+
+
+def train_champion(
+    table: pl.DataFrame, *, horizon_steps: int, trials: int, seed: int
+) -> tuple[BaselineResult, np.ndarray, Any]:
+    """Fit the champion on train_fit, select on train_val; scores for SCORED_SPLITS rows."""
+    features = champion_features(table)
+    train = table.filter(pl.col("split") == "train_fit")
+    val = table.filter(pl.col("split") == "train_val")
+    scored = table.filter(pl.col("split").is_in(SCORED_SPLITS))
+    started = time.perf_counter()
+    booster, result = fit_lgbm(
+        matrix(train, features, horizon_steps),
+        labels(train),
+        matrix(val, features, horizon_steps),
+        labels(val),
+        features,
+        trials=trials,
+        seed=seed,
+    )
+    result.name = "lgbm_g1"
+    result.seconds = round(time.perf_counter() - started, 1)
+    scores = np.asarray(
+        booster.predict(
+            matrix(scored, features, horizon_steps), num_iteration=booster.best_iteration
+        )
+    )
+    return result, scores, booster

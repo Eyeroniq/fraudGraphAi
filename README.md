@@ -1,8 +1,21 @@
 # FraudGraph
 
-Real-time fraud detection for payment transactions: it scores each transaction, says why,
-says when it is unsure, learns from new labels as a stream and notices when fraud patterns
-change. The build plan and architecture are in [ROADMAP.md](ROADMAP.md).
+A **pre-authorisation risk service for a payment switch**: every payment gets a decision —
+approve, **step-up** (OTP / 3DS challenge), send to a human, or block — chosen by expected
+cost in money, in about a millisecond. It says when it is unsure (conformal prediction sets),
+uses the payment graph (is the receiving account new, how many new senders hit it today),
+and is built to learn from delayed labels and notice drift.
+
+| | |
+|---|---|
+| Latency | 0.12 ms p95 per decision (features + model, CPU); ~1 ms through the API |
+| Graph features | test cost halves vs the tabular baseline (133 M → 66 M), [graph study](docs/graph_study.md) |
+| Full policy | 66 M on test vs 154 M for a single global threshold, [conformal + policy](docs/conformal.md) |
+| Guarantee | 80 % fraud-class coverage target (0.805 on test, 0.79–0.87 per day), conformal sets |
+
+Data: PaySim (simulated mobile money); costs are in its currency units — read them as ₹ for
+an Indian deployment. Honest limits are in [the data audit](docs/data_audit.md) and the
+docs above. Build plan and architecture: [ROADMAP.md](ROADMAP.md).
 
 ## Development setup
 

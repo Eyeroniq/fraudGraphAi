@@ -67,6 +67,19 @@ class CostSettings(BaseModel):
     c_friction: float = Field(default=50.0, ge=0)
     catch_rate: float = Field(default=0.9, ge=0, le=1)
     c_block: float = Field(default=0.0, ge=0)
+    step_up_enabled: bool = False
+    c_step_up: float = Field(default=200.0, ge=0)
+    step_up_catch_rate: float = Field(default=0.7, ge=0, le=1)
+
+
+class PolicySettings(BaseModel):
+    """Conformal layer and review capacity (task 4.2)."""
+
+    alpha: float = Field(default=0.05, gt=0, lt=1)
+    conformal_score: str = Field(default="lac", pattern="^(lac|aps)$")
+    mondrian: bool = True
+    uncertain_action: str = Field(default="REVIEW", pattern="^(REVIEW|STEP_UP)$")
+    review_capacity_per_day: int | None = Field(default=2_000, ge=1)
 
 
 class MlflowSettings(BaseModel):
@@ -88,6 +101,7 @@ class Settings(BaseSettings):
     data: DataSettings = Field(default_factory=DataSettings)
     splits: SplitSettings = Field(default_factory=SplitSettings)
     costs: CostSettings = Field(default_factory=CostSettings)
+    policy: PolicySettings = Field(default_factory=PolicySettings)
     champion: str = "lgbm"
     mlflow: MlflowSettings = Field(default_factory=MlflowSettings)
 

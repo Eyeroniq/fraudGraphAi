@@ -117,6 +117,23 @@ button:disabled {
   color: var(--block);
 }
 
+.decision.STEP_UP {
+  color: var(--accent);
+}
+
+.chip {
+  display: inline-block;
+  font-size: 13px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+
+.chip.unsure {
+  border-color: var(--review);
+  color: var(--review);
+}
+
 table {
   width: 100%;
   border-collapse: collapse;

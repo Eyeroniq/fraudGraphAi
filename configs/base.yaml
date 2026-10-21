@@ -36,9 +36,21 @@ costs:
   c_friction: 20000.0
   catch_rate: 0.9
   c_block: 0.0
+  # STEP_UP (Juspay track J3): challenge the customer (OTP / 3DS) instead of a human review.
+  step_up_enabled: true
+  c_step_up: 200.0          # friction / abandonment cost for a legit customer
+  step_up_catch_rate: 0.7   # share of fraud the challenge stops
+
+# Decision policy layers (task 4.2): conformal override and review capacity.
+policy:
+  alpha: 0.2                # fraud-class coverage target 1 - alpha (see docs/conformal.md)
+  conformal_score: lac
+  mondrian: true
+  uncertain_action: STEP_UP # challenge the customer when the model is unsure (REVIEW also possible)
+  review_capacity_per_day: 2000
 
 # Model the policy, bundle and API use.
-champion: lgbm
+champion: lgbm_g1  # T+O+G1 minus G1-b, the graph-study winner
 
 mlflow:
   tracking_uri: sqlite:///mlruns/mlflow.db
