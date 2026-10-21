@@ -12,6 +12,12 @@ paths:
   artifacts_dir: artifacts
   reports_dir: reports
 
+data:
+  kaggle_dataset: ealaxi/paysim1
+  csv_name: PS_20174392719_1491204439457_log.csv
+  # sha256 of the raw CSV. Leave null until the first download prints it, then pin it here.
+  raw_sha256: null
+
 mlflow:
   tracking_uri: sqlite:///mlruns/mlflow.db
   experiment: fraudgraph

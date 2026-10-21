@@ -1,10 +1,10 @@
 # Data and generated outputs
-data/
-artifacts/
-reports/*
-!reports/figures/
-mlruns/
-mlartifacts/
+/data/
+/artifacts/
+/reports/*
+!/reports/figures/
+/mlruns/
+/mlartifacts/
 
 # Python
 __pycache__/

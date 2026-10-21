@@ -19,6 +19,21 @@ uv run fgx --help  # pipeline CLI
 
 `uv run poe` with no task lists every task.
 
+## Data
+
+FraudGraph uses the [PaySim](https://www.kaggle.com/datasets/ealaxi/paysim1) dataset (~470 MB).
+
+```bash
+# with a Kaggle API token in KAGGLE_USERNAME / KAGGLE_KEY (or ~/.kaggle/kaggle.json)
+uv run poe data
+# or, after downloading the zip from Kaggle in your browser
+uv run fgx data download --from-file path/to/archive.zip
+uv run fgx data prepare
+```
+
+The first download prints the file's sha256. Pin it as `data.raw_sha256` in
+`configs/base.yaml` so every later run is checked against it.
+
 ## Configuration
 
 Settings come from [configs/base.yaml](configs/base.yaml). Override any value with an

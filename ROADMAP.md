@@ -65,7 +65,7 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | ID | Task | Status |
 |---|---|---|
 | **0.1** | Repo skeleton, tooling (uv, ruff, mypy, pre-commit, poe tasks) | ☑ 2026-10-21 · `poe check` green (10 tests, mypy strict) |
-| **0.2** | Data download with checksum + pandera schema | ☐ |
+| **0.2** | Data download with checksum + pandera schema | ☑ 2026-10-21 · 23 data tests, 10 corrupted cases rejected; real-data hash still to pin |
 | **0.3** | EDA + leakage audit (`docs/data_audit.md`) | ☐ |
 | **0.4** | Synthetic PaySim-schema fixture generator (for tests/CI) | ☐ |
 | **0.5** | CI skeleton (lint + unit tests) | ☐ |
@@ -469,8 +469,8 @@ The project `.gitignore` only lists project artifacts (`data/`, `reports/`, `art
 - *Done when:* `uv run poe setup && uv run poe check` passes on a clean clone.
 
 **0.2 Data download & schema**
-- `fgx data download` uses the Kaggle API (`KAGGLE_USERNAME/KEY` env), verifies sha256 and writes to `data/raw/` (git-ignored).
-- `fgx data prepare`: pandera schema (types, `type ∈ {...}`, `amount ≥ 0`, `step ∈ [1, 744]`, IDs match `^[CM]\d+$`) → sorted parquet.
+- `fgx data download` uses the Kaggle API (`KAGGLE_USERNAME/KEY` env or `~/.kaggle/kaggle.json`, plain HTTPS, no `kaggle` package) or `--from-file` for a hand-downloaded zip/CSV, verifies sha256 and writes to `data/raw/` (git-ignored). The first download prints the hash; pin it as `data.raw_sha256` in `configs/base.yaml`.
+- `fgx data prepare`: pandera schema (types, `type ∈ {...}`, `amount ≥ 0`, `step ∈ [1, 744]`, IDs match `^[CM]\d+$`) → sorted parquet. Columns renamed to snake_case; `txn_id = T{row:07d}` from raw file order; stable sort by step; `paysim.meta.json` records the source hash so an up-to-date run is skipped.
 - *Done when:* prepare is idempotent and the schema test fails on a deliberately corrupted sample.
 
 **0.3 EDA + leakage audit** → `docs/data_audit.md`

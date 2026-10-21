@@ -38,6 +38,16 @@ class Paths(BaseModel):
         return path if path.is_absolute() else (REPO_ROOT / path).resolve()
 
 
+class DataSettings(BaseModel):
+    """Where PaySim comes from and the checksum it must match."""
+
+    kaggle_dataset: str = "ealaxi/paysim1"
+    csv_name: str = "PS_20174392719_1491204439457_log.csv"
+    # sha256 of the raw CSV. Null until pinned: the first download prints the hash
+    # to copy here, and every later download or prepare is checked against it.
+    raw_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
 class MlflowSettings(BaseModel):
     tracking_uri: str = "sqlite:///mlruns/mlflow.db"
     experiment: str = "fraudgraph"
@@ -54,6 +64,7 @@ class Settings(BaseSettings):
     seed: int = 42
     label_delay_steps: int = Field(default=24, ge=0)
     paths: Paths = Field(default_factory=Paths)
+    data: DataSettings = Field(default_factory=DataSettings)
     mlflow: MlflowSettings = Field(default_factory=MlflowSettings)
 
     @classmethod
