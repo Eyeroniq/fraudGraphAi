@@ -64,7 +64,7 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 
 | ID | Task | Status |
 |---|---|---|
-| **0.1** | Repo skeleton, tooling (uv, ruff, mypy, pre-commit, Makefile) | ☐ |
+| **0.1** | Repo skeleton, tooling (uv, ruff, mypy, pre-commit, poe tasks) | ☑ 2026-10-21 · `poe check` green (10 tests, mypy strict) |
 | **0.2** | Data download with checksum + pandera schema | ☐ |
 | **0.3** | EDA + leakage audit (`docs/data_audit.md`) | ☐ |
 | **0.4** | Synthetic PaySim-schema fixture generator (for tests/CI) | ☐ |
@@ -123,6 +123,7 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | Date | Change |
 |---|---|
 | 2026-10-16 | Review pass before Phase 0: one job per split (`train_val`, `calib_a`, `calib_b`); step-bucketed state instead of per-step staging; 3.0 rule made exact (seed averaging, primary comparison, freeze); GNN hybrid needs out-of-fold, batch-refreshed embeddings; prior-shift check; D0 built from the stable period; LightGBM `pred_contrib` in serving; idempotent Redis writes; static-export routing; effort re-totalled. |
+| 2026-10-16 | Native Windows dev: Python 3.12 via uv, `pyproject.toml` + `uv.lock` instead of `requirements*.in`, poe tasks instead of `make`, `.gitattributes` forcing LF, pre-commit hook shim. |
 
 ---
 
@@ -388,9 +389,10 @@ and down to tablet.
 
 ```
 fraudGraphAi/
-├─ ROADMAP.md  README.md  LICENSE  Makefile  pyproject.toml
-├─ requirements.in / requirements.txt            # full (research) – uv pip compile --generate-hashes
-├─ requirements-serve.in / requirements-serve.txt # slim (api/worker) – no torch/PyG/shap-plots
+├─ ROADMAP.md  README.md  LICENSE  pyproject.toml  uv.lock  .python-version  .gitattributes
+│                  # pyproject: core deps (api/worker) + `research` extra (torch/PyG/shap plots…)
+│                  # + `dev` group; poe tasks. uv.lock pins everything with hashes.
+├─ scripts/        install_git_hooks.py  (dev helpers, not part of the package)
 ├─ configs/        base.yaml  costs.yaml  features.yaml  drift_scenarios.yaml  conformal.yaml
 ├─ fraudgraph/
 │  ├─ config.py  cli.py  tracking.py  logging.py
@@ -426,7 +428,8 @@ change touches one file.
 
 | Area | Choice | Notes |
 |---|---|---|
-| Language | Python 3.11 (or 3.12 if all deps support it) | PyG/river/MAPIE wheels are reliably available |
+| Language | Python 3.12 (pinned in `.python-version`, installed by uv) | PyG/river/MAPIE wheels are reliably available |
+| Dev platform | Native Windows, macOS or Linux; Docker Desktop for Redis/Postgres/compose | No WSL needed. `uv` + `poe` tasks behave the same everywhere; `.gitattributes` keeps LF so scripts built into Linux images work |
 | Data | polars + pyarrow, DuckDB for ad-hoc SQL, pandera schemas | PaySim is ~6.3 M rows / ~470 MB CSV |
 | GBM | LightGBM (XGBoost as a sanity check) | |
 | Graph | PyTorch (CPU) + PyTorch Geometric; temporal sampling via `NeighborLoader`/`LinkNeighborLoader` `time_attr` | research only (D5) |
@@ -459,9 +462,11 @@ The project `.gitignore` only lists project artifacts (`data/`, `reports/`, `art
 
 **0.1 Repo skeleton & tooling**
 - `git init`, layout as in A10, `pyproject.toml` (ruff, mypy, pytest config), `.pre-commit-config.yaml`.
-- `uv` + `requirements*.in` → hashed lock files. `Makefile` targets: `setup`, `lint`, `test`, `data`, `all`, `up`, `down`.
-- `fraudgraph/config.py`: pydantic-settings loading `configs/base.yaml` + env overrides.
-- *Done when:* `make setup && make lint && make test` passes on a clean clone.
+- `uv` with `pyproject.toml` + `uv.lock` (hashed). Core deps for api/worker, a `research` extra for heavy research-only libraries, a `dev` group. Add libraries in the task that first needs them.
+- Task runner: **poethepoet** tasks in `pyproject.toml`, run as `uv run poe <task>` (cross-platform, no `make`). 0.1 adds `setup`, `lint`, `fmt`, `test`, `check`; `data`/`all` arrive with 0.2 and `up`/`down` with 2.3.
+- `pre-commit install` refuses to run when a global `core.hooksPath` is set, so `poe setup` writes a small `.git/hooks/pre-commit` shim instead (`scripts/install_git_hooks.py`).
+- `fraudgraph/config.py`: pydantic-settings loading `configs/base.yaml` + `FG_*` env overrides (`FG_CONFIG` picks another file).
+- *Done when:* `uv run poe setup && uv run poe check` passes on a clean clone.
 
 **0.2 Data download & schema**
 - `fgx data download` uses the Kaggle API (`KAGGLE_USERNAME/KEY` env), verifies sha256 and writes to `data/raw/` (git-ignored).
@@ -538,7 +543,7 @@ container → web page → CI. Everything later plugs into this.
 - **2.2** FastAPI `POST /v1/score`, `/health`, `/ready`, pydantic schemas from A7 (reasons may be empty for now).
 - **2.3** `docker/api.Dockerfile` (multi-stage, slim, non-root, healthcheck), `deploy/docker-compose.yml` with `api` only. CI job: build image → run → `curl /ready` → score 3 fixture txns.
 - **2.4** `web/`: Next.js scaffold with one page — a form → `/v1/score` → shows the decision.
-- *Done when:* `make up` and opening the page shows a decision for a typed transaction, and CI runs the smoke test.
+- *Done when:* `uv run poe up` and opening the page shows a decision for a typed transaction, and CI runs the smoke test.
 
 ## Phase 3 — Graph features & GNN study
 
@@ -790,7 +795,7 @@ Rules: tests never touch the real dataset, every random thing is seeded, and a b
 | PaySim is "too easy" through the balance columns | Fake-looking results | D2: decision-time features only. The leaky run is shown only as an artifact (E5). |
 | Origin IDs almost never repeat → little graph signal | Graph may not win | Pre-registered rule (3.0), destination-side and 2-hop features, D3 scenario, honest verdict. A null result is a valid result. |
 | 6.3 M rows on a laptop | Slow iteration | polars, a 10 % time-contiguous dev sample, profile the engine early, cache feature parquet. |
-| PyG / torch install on Windows | Lost days | Run research in Docker/WSL2 with CPU wheels. Serving does not need torch (D5). |
+| PyG / torch install on Windows | Lost days | Use the CPU wheels for `torch` + `torch_geometric` only (SAGE/GINE need no compiled extras like `torch-scatter`). If that still fails, run the GNN study in a Docker container. Serving does not need torch (D5). |
 | Library API churn (MAPIE 1.x, Evidently ≥ 0.7, Quantus maintenance, Giskard's shift to LLMs) | Broken code / tutorials | Pin versions, one wrapper module per library, a spike before relying on Quantus, own fallbacks for conformal/PSI. |
 | Conformal guarantee breaks under drift | Over-confident "certain" decisions | Per-day coverage monitoring, documented, ACI as stretch. |
 | Online state diverges between offline and online | Silent skew | D3 design + parity test in CI against a real Redis. |

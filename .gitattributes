@@ -1,0 +1,18 @@
+# Keep LF in the repository and in working copies on every OS, so shell scripts
+# and Dockerfiles built into Linux images work when checked out on Windows.
+* text=auto eol=lf
+
+# Windows-only scripts keep CRLF.
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+
+# Binary files: never touch line endings or diff as text.
+*.png     binary
+*.jpg     binary
+*.gif     binary
+*.ico     binary
+*.parquet binary
+*.npy     binary
+*.joblib  binary
+*.zip     binary

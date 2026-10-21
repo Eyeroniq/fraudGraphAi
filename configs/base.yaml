@@ -1,0 +1,17 @@
+# Base configuration. Every value can be overridden by an environment variable:
+#   FG_<FIELD>, with "__" between nested levels, e.g. FG_PATHS__DATA_DIR=/mnt/big/data
+# A different YAML file can be used with FG_CONFIG=path/to/file.yaml.
+
+seed: 42
+
+# PaySim: 1 step = 1 hour. Labels become usable for features L steps after the event (D4).
+label_delay_steps: 24
+
+paths:
+  data_dir: data
+  artifacts_dir: artifacts
+  reports_dir: reports
+
+mlflow:
+  tracking_uri: sqlite:///mlruns/mlflow.db
+  experiment: fraudgraph
