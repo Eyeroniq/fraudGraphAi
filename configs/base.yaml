@@ -29,6 +29,17 @@ splits:
   calib_a_share: 0.5
   min_test_days: 10
 
+# Cost model (A6), in PaySim currency units (median legit transfer ~171k).
+# Review ~1 % and friction ~12 % of that; see docs/policy.md for why not 5 / 50.
+costs:
+  c_review: 2000.0
+  c_friction: 20000.0
+  catch_rate: 0.9
+  c_block: 0.0
+
+# Model the policy, bundle and API use.
+champion: lgbm
+
 mlflow:
   tracking_uri: sqlite:///mlruns/mlflow.db
   experiment: fraudgraph

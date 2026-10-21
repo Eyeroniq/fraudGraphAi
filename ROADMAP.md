@@ -73,7 +73,7 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | **1.2** | Decision-time tabular features | ☑ 2026-10-21 · 13 T+O features, backfill 6.36 M events in 107 s; origin history on 0.09 % of rows |
 | **1.3** | Baselines: rule, logistic regression, LightGBM | ☑ 2026-10-21 · test AP: lgbm 0.357 (no hour 0.197), logreg 0.040, rule 0.005; prevalence 0.17 % |
 | **1.4** | Evaluation harness (PR-AUC, recall@P, block bootstrap CIs) | ☑ 2026-10-21 · test AP lgbm_no_hour 0.197 [0.117, 0.295] (9 blocks); golden-number test pinned |
-| **1.5** | Cost model, calibration, cost-optimal threshold | ☐ |
+| **1.5** | Cost model, calibration, cost-optimal threshold | ☑ 2026-10-21 · test cost: EC rule 130 M vs global 218 M vs approve-all 1,082 M; review 4.4 % ([policy](docs/policy.md)) |
 | **1.6** | MLflow tracking + model bundle format | ☐ |
 | **2.1** | `Scorer` (pure-Python inference) + artifact bundle loader | ☐ |
 | **2.2** | FastAPI `/v1/score`, `/health`, `/ready` | ☐ |
@@ -125,6 +125,7 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | 2026-10-16 | Review pass before Phase 0: one job per split (`train_val`, `calib_a`, `calib_b`); step-bucketed state instead of per-step staging; 3.0 rule made exact (seed averaging, primary comparison, freeze); GNN hybrid needs out-of-fold, batch-refreshed embeddings; prior-shift check; D0 built from the stable period; LightGBM `pred_contrib` in serving; idempotent Redis writes; static-export routing; effort re-totalled. |
 | 2026-10-16 | Native Windows dev: Python 3.12 via uv, `pyproject.toml` + `uv.lock` instead of `requirements*.in`, poe tasks instead of `make`, `.gitattributes` forcing LF, pre-commit hook shim. |
 | 2026-10-21 | From the [data audit](docs/data_audit.md): D2 now excludes the sender balance too; model splits inside steps 1–408 with 409–743 as late-period test; G1-a (destination novelty) is the core graph family, O and G1-b expected weak, `cash_out_after_transfer` dropped; hour-of-day ablation required; B-rule = new destination. |
+| 2026-10-21 | A6 costs rescaled to PaySim amounts: `c_review` 5 → 2,000, `c_friction` 50 → 20,000 (the old values review 71–99 % of traffic). Champion = `lgbm` (hour allowed, ablation always reported). |
 
 ---
 
@@ -282,13 +283,15 @@ class FeatureEngine:
 
 ## A6. Decision policy
 
-Calibrated `p = P(fraud | x)`, amount `a`, and costs from `configs/costs.yaml`:
+Calibrated `p = P(fraud | x)`, amount `a`, and costs from `configs/base.yaml` (`costs:`):
 
 | Action | Cost if legit | Cost if fraud |
 |---|---|---|
 | APPROVE | 0 | `a` (loss) |
-| REVIEW | `c_review` (default 5) | `c_review + (1 − r)·a` (r = analyst catch rate, default 0.9) |
-| BLOCK | `c_friction` (default 50, churn/complaint) | `c_block` (default 0) |
+| REVIEW | `c_review` (default **2,000**; was 5) | `c_review + (1 − r)·a` (r = analyst catch rate, default 0.9) |
+| BLOCK | `c_friction` (default **20,000**; was 50, churn/complaint) | `c_block` (default 0) |
+
+Costs are in PaySim currency units, so they must be on the scale of the amounts (median legit transfer ≈ 168k). At 5 / 50 the policy reviews 71–99 % of transactions; see [docs/policy.md](docs/policy.md).
 
 1. **Expected-cost rule:** pick the action with the lowest `E[cost] = (1−p)·cost_legit + p·cost_fraud`.
    This is a *per-transaction* threshold that depends on the amount.
@@ -540,6 +543,7 @@ The project `.gitignore` only lists project artifacts (`data/`, `reports/`, `art
 - **Prior shift:** calibrated probabilities assume the calib prevalence. Report test cost with the probabilities as-is *and* after a prior-shift correction to the test-period prevalence (as if it were known from labels), to show how much the expected-cost rule depends on it.
 - Sensitivity table: how cost and threshold move when `c_review`, `c_friction`, `r` move ×0.5 / ×2.
 - *Done when:* `policy.json` is written and the test-set cost of both rules is reported with CIs.
+- *Built:* `fgx policy` → `artifacts/policy/<model>/{calibrator.joblib, policy.json}` and `reports/eval/policy_<model>/` (report, cost-vs-threshold and reliability plots). The global threshold is an alert threshold (alert → REVIEW). Cost CIs come from the same block bootstrap as 1.4.
 
 **1.6 MLflow + bundle** — every run logs params, metrics, the data hash and the git sha. `fgx bundle` writes the A3 bundle.
 

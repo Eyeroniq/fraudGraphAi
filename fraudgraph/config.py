@@ -60,6 +60,15 @@ class SplitSettings(BaseModel):
     min_test_days: int = Field(default=10, ge=1)  # else bootstrap uses 6-step blocks
 
 
+class CostSettings(BaseModel):
+    """Money-based cost model (A6), in PaySim's currency units."""
+
+    c_review: float = Field(default=5.0, ge=0)
+    c_friction: float = Field(default=50.0, ge=0)
+    catch_rate: float = Field(default=0.9, ge=0, le=1)
+    c_block: float = Field(default=0.0, ge=0)
+
+
 class MlflowSettings(BaseModel):
     tracking_uri: str = "sqlite:///mlruns/mlflow.db"
     experiment: str = "fraudgraph"
@@ -78,6 +87,8 @@ class Settings(BaseSettings):
     paths: Paths = Field(default_factory=Paths)
     data: DataSettings = Field(default_factory=DataSettings)
     splits: SplitSettings = Field(default_factory=SplitSettings)
+    costs: CostSettings = Field(default_factory=CostSettings)
+    champion: str = "lgbm"
     mlflow: MlflowSettings = Field(default_factory=MlflowSettings)
 
     @classmethod

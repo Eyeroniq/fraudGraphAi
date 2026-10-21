@@ -304,6 +304,68 @@ def evaluate_cmd(
             typer.echo(f"  dAP {pair:<34} {d['delta_ap']:+.4f} [{lo:+.4f}, {hi:+.4f}]")
 
 
+@app.command("policy")
+def policy_cmd(
+    model: Annotated[
+        str | None, typer.Option(help="Model to calibrate (default: champion).")
+    ] = None,
+    predictions: Annotated[Path, typer.Option(help="Predictions parquet.")] = Path(
+        "artifacts/baselines/predictions.parquet"
+    ),
+    resamples: Annotated[int, typer.Option(help="Bootstrap resamples for cost CIs.")] = 1_000,
+) -> None:
+    """Calibrate on calib_a, fit thresholds and the expected-cost rule, cost them on test."""
+    import polars as pl
+
+    from fraudgraph.data.prepare import PARQUET_NAME
+    from fraudgraph.data.splits import load_plan
+    from fraudgraph.decision.costs import CostParams
+    from fraudgraph.decision.fit_policy import fit_policy, save, write_plots
+
+    settings = get_settings()
+    name = model or settings.champion
+    plan = load_plan(settings.paths.data_dir / "processed" / "splits.json")
+    frame = pl.read_parquet(predictions).join(
+        pl.read_parquet(
+            settings.paths.data_dir / "processed" / PARQUET_NAME, columns=["txn_id", "amount"]
+        ),
+        on="txn_id",
+        how="left",
+        maintain_order="left",
+    )
+    costs = CostParams(**settings.costs.model_dump())
+    calibrator, policy, report = fit_policy(
+        frame,
+        name,
+        costs,
+        block_steps=plan.bootstrap_block_steps,
+        resamples=resamples,
+        seed=settings.seed,
+    )
+    out = settings.paths.artifacts_dir / "policy" / name
+    report_dir = settings.paths.reports_dir / "eval" / f"policy_{name}"
+    save(out, report_dir, calibrator, policy, report)
+    write_plots(frame, name, calibrator, costs, report_dir)
+
+    typer.echo(f"{out}  (global threshold on calibrated p: {policy['global_threshold']:.4g})")
+    for split, stats in report["calibration"].items():
+        line = "  ".join(
+            f"{m}: brier {s['brier']:.5f} ece {s['ece']:.5f}" for m, s in stats.items()
+        )
+        typer.echo(f"calibration {split:<9} {line}")
+    typer.echo(
+        f"\n{'test rule':<27} {'total cost':>14} {'95% CI':>31} "
+        f"{'review':>7} {'block':>6} {'stopped':>8}"
+    )
+    for rule, r in report["test"].items():
+        lo, hi = r["cost"]["ci95"]
+        typer.echo(
+            f"{rule:<27} {r['cost']['total']:>14,.0f} [{lo:>13,.0f}, {hi:>13,.0f}] "
+            f"{r['action_share']['REVIEW']:>7.2%} {r['action_share']['BLOCK']:>6.2%} "
+            f"{r['fraud_amount_stopped_share']:>8.1%}"
+        )
+
+
 @app.command("split")
 def split() -> None:
     """Choose time-based splits with the label-delay embargo -> data/processed/splits.json."""
