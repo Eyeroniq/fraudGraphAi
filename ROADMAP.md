@@ -79,10 +79,10 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | **2.2** | FastAPI `/v1/score`, `/health`, `/ready` | ☑ 2026-10-21 · idempotent on `txn_id`, 409 on out-of-order, error model; ~1 ms per score warm |
 | **2.3** | Dockerfile + compose (api only) + smoke test in CI | ☑ 2026-10-21 · slim multi-stage non-root image; CI builds a fixture bundle and scores 3 txns |
 | **2.4** | Minimal web page that calls `/v1/score` | ☑ 2026-10-21 · static Next.js export behind Caddy, same-origin `/api` |
-| **3.0** | Pre-register the graph comparison rule (in this file) | ☐ |
-| **3.1** | Temporal feature engine (account state, incremental) | ☐ |
-| **3.2** | Hand-built graph features G1 (1-hop + 2-hop, windows) | ☐ |
-| **3.3** | Batch/online parity + leakage property tests | ☐ |
+| **3.0** | Pre-register the graph comparison rule (in this file) | ☑ frozen in commit `09e2edd` (2026-10-16), before any graph result |
+| **3.1** | Temporal feature engine (account state, incremental) | ☑ 2026-10-21 · engine 1.3.0; full backfill 121 s, peak 4.27 M keys / 4.7 GB |
+| **3.2** | Hand-built graph features G1 (1-hop + 2-hop, windows) | ☑ 2026-10-21 · 13 `g_*` features (G1-a destination, G1-b known fraud, G1-c pair) |
+| **3.3** | Batch/online parity + leakage property tests | ☑ 2026-10-21 · hypothesis property tests, label-delay, novelty and 2,000-event parity, planted ring |
 | **3.4** | PyG graph build + temporal GraphSAGE/GINE edge classifier | ☐ |
 | **3.5** | Hybrid: GNN embeddings → LightGBM | ☐ |
 | **3.6** | Experiment matrix (3 seeds) + honest verdict (`docs/graph_study.md`) | ☐ |
@@ -265,7 +265,7 @@ class FeatureEngine:
   (`first_seen_step`, last orig→dest step) are stored with their step and compared the same way, so
   no staging or "step advanced" commit is needed. An event whose step is older than the latest step
   already seen is rejected with a clear error, not silently merged (the replayer sends steps in order).
-- **Label rule:** a label affects features only once `current_step ≥ label_step + L` (default `L` = 24).
+- **Label rule:** a label for a transaction at step `s` is known at `s + L` (default `L` = 24) and affects features from step `s + L + 1` on (it is recorded at the first event at or after `s + L`; same-step events never see it). Only confirmed fraud is stored (`f:<dest>` keys).
 
 **Feature families** (all decision-time safe):
 
@@ -586,10 +586,12 @@ per-step commits, label-delay queue. Backfill over the full 6.3 M events with `I
 **3.2 G1 hand-built graph features** — families G1-a/b/c. Each feature has a docstring that says what
 it captures and why it is decision-time safe.
 
+- *Built (3.1–3.2):* buckets are `__slots__` objects with an optional counterparty list (distinct senders and sender→receiver pairs without extra keys). Engine `1.3.0`: MINOR adds features and stays compatible with older bundles; MAJOR changes definitions and is refused. G1 features: `g_dest_in_n_{1h,1d,1w}`, `g_dest_senders_{1d,1w}`, `g_dest_is_new`, `g_dest_log_in_sum`, `g_dest_out_n`, `g_dest_age`, `g_dest_in_share_1d` (G1-a); `g_dest_known_fraud_in` (G1-b, label-delayed); `g_pair_n` (G1-c). 2-hop sender out-degree was dropped: senders are single-use (audit).
+
 **3.3 Leakage & parity tests** (must pass before any results are trusted):
 - *Property test (hypothesis):* features for event `e` are unchanged if you append any events with `step ≥ e.step`.
 - *Label-delay test:* a label at step `s` does not change any feature before `s + L`.
-- *Parity test:* backfill features == API features (via `RedisStore`) for 2 000 fixture events, exact match.
+- *Parity test:* backfill features == API features for 2 000 fixture events, exact match. *(Done against the in-memory store; the same test runs against `RedisStore` in 7.1.)*
 - *Planted-ring test:* on the fixture, ring destinations have a higher `dest_distinct_senders_24h` than legit ones.
 
 **3.4 PyG GNN** (`graph/`)
@@ -816,6 +818,7 @@ Rules: tests never touch the real dataset, every random thing is seeded, and a b
 | Library API churn (MAPIE 1.x, Evidently ≥ 0.7, Quantus maintenance, Giskard's shift to LLMs) | Broken code / tutorials | Pin versions, one wrapper module per library, a spike before relying on Quantus, own fallbacks for conformal/PSI. |
 | Conformal guarantee breaks under drift | Over-confident "certain" decisions | Per-day coverage monitoring, documented, ACI as stretch. |
 | Online state diverges between offline and online | Silent skew | D3 design + parity test in CI against a real Redis. |
+| Labels reach the backfill but not (yet) the API | `g_dest_known_fraud_in` is 0 online until `/v1/labels` exists (7.3) | A model using G1-b is not served before 7.3; 3.6 reports E1 with and without G1-b. |
 | Scope creep (it's a big project) | Never finishes | The walking skeleton (Phase 2) makes something shippable early, and each phase ends with a usable increment. |
 
 ---

@@ -1,10 +1,11 @@
 """Online feature state (D3, D4).
 
-State is a set of per-key histories of step buckets: `[step, count, amount_sum,
-amount_sum_sq]`. Keys are namespaced (`o:<account>` for outgoing activity of an origin,
-later `d:<account>` for a destination). Writes go straight into the bucket of their
-own step; reads return only buckets with `step < before_step`, so events in the same
-step never see each other and no "step committed" event is needed.
+State is a set of per-key histories of step buckets. Keys are namespaced: `o:<acct>`
+(outgoing activity of an account; members = destinations it paid), `d:<acct>` (incoming
+activity; members = senders), `f:<acct>` (confirmed fraud labels on incoming payments,
+recorded when the label becomes known). Writes go straight into the bucket of their own
+step; reads return only buckets with `step < before_step`, so events in the same step
+never see each other and no "step committed" event is needed.
 
 Histories older than `horizon_steps` are dropped (the Redis store uses the same TTL),
 so memory stays bounded by recent activity.
@@ -15,9 +16,28 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Protocol
 
-# One step bucket: [step, count, amount_sum, amount_sum_sq]. A list (not a tuple) so the
-# in-memory store can update the newest bucket in place.
-Bucket = list[float]
+
+class Bucket:
+    """One key's activity in one step. `members` (optional) lists counterparties."""
+
+    __slots__ = ("members", "n", "step", "total", "total_sq")
+
+    def __init__(self, step: int, amount: float, member: str | None) -> None:
+        self.step = step
+        self.n = 1
+        self.total = amount
+        self.total_sq = amount * amount
+        self.members: list[str] | None = [member] if member is not None else None
+
+    def add(self, amount: float, member: str | None) -> None:
+        self.n += 1
+        self.total += amount
+        self.total_sq += amount * amount
+        if member is not None:
+            if self.members is None:
+                self.members = [member]
+            else:
+                self.members.append(member)
 
 
 class OutOfOrderError(ValueError):
@@ -32,8 +52,8 @@ class StateStore(Protocol):
         """Buckets of `key` with `before_step - horizon <= step < before_step`, oldest first."""
         ...
 
-    def add(self, key: str, step: int, amount: float) -> None:
-        """Record one event of `amount` for `key` at `step`."""
+    def add(self, key: str, step: int, amount: float, member: str | None = None) -> None:
+        """Record one event of `amount` (with an optional counterparty) for `key`."""
         ...
 
 
@@ -62,9 +82,9 @@ class InMemoryStore:
         if not buckets:
             return []
         oldest = before_step - self.horizon_steps
-        return [b for b in buckets if oldest <= b[0] < before_step]
+        return [b for b in buckets if oldest <= b.step < before_step]
 
-    def add(self, key: str, step: int, amount: float) -> None:
+    def add(self, key: str, step: int, amount: float, member: str | None = None) -> None:
         if self._latest is not None and step < self._latest:
             raise OutOfOrderError(f"step {step} arrived after step {self._latest}")
         if self._latest is None or step > self._latest:
@@ -72,15 +92,12 @@ class InMemoryStore:
             self._evict(step)
 
         buckets = self._buckets.setdefault(key, [])
-        if buckets and buckets[-1][0] == step:
-            bucket = buckets[-1]
-            bucket[1] += 1
-            bucket[2] += amount
-            bucket[3] += amount * amount
+        if buckets and buckets[-1].step == step:
+            buckets[-1].add(amount, member)
         else:
-            buckets.append([float(step), 1.0, amount, amount * amount])
+            buckets.append(Bucket(step, amount, member))
             oldest = step - self.horizon_steps
-            while buckets[0][0] < oldest:
+            while buckets[0].step < oldest:
                 buckets.pop(0)
         self._last_touched[step].append(key)
 
@@ -90,6 +107,6 @@ class InMemoryStore:
         for step in range(self._evicted_through, cutoff):
             for key in self._last_touched.pop(step, ()):
                 buckets = self._buckets.get(key)
-                if buckets and buckets[-1][0] == step:
+                if buckets and buckets[-1].step == step:
                     del self._buckets[key]
         self._evicted_through = max(self._evicted_through, cutoff)

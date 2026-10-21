@@ -8,7 +8,7 @@ import pytest
 
 from fraudgraph.data.prepare import to_canonical
 from fraudgraph.data.synth import generate
-from fraudgraph.features.backfill import MODELLED_TYPES, backfill, events_from
+from fraudgraph.features.backfill import MODELLED_TYPES, LabelQueue, backfill, events_from
 from fraudgraph.features.engine import FeatureEngine
 from fraudgraph.features.spec import Event, FeatureSpec
 from fraudgraph.features.state import InMemoryStore, OutOfOrderError
@@ -81,7 +81,7 @@ def test_history_beyond_horizon_is_forgotten_and_evicted() -> None:
 
     assert feats["o_first_seen"] == 1.0
     assert "o:C1" not in store._buckets
-    assert len(store) == 1  # only C3 is left
+    assert set(store._buckets) == {"o:C3", "d:C999"}  # only the newest event is left
 
 
 def test_features_is_pure() -> None:
@@ -154,12 +154,18 @@ def test_backfill_features_only_use_strictly_earlier_steps() -> None:
     sample = [modelled[i] for i in np.random.default_rng(1).choice(len(modelled), 60, False)]
     assert any(by_id[e.txn_id]["o_n_1w"] > 0 for e in sample)  # history is exercised
 
+    fraud = dict(zip(frame["txn_id"].to_list(), frame["is_fraud"].to_list(), strict=True))
     for target in sample:
         fresh = engine()
+        labels = LabelQueue(SPEC.label_delay_steps)
         for e in events:
             if e.step >= target.step:
                 break
+            labels.release(fresh, e.step)
             fresh.apply(e)
+            if fraud[e.txn_id]:
+                labels.push(e)
+        labels.release(fresh, target.step)
         stored = by_id[target.txn_id]
         for name, value in fresh.features(target).items():
             if math.isnan(value):

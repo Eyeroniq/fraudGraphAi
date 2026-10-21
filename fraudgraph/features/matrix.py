@@ -18,6 +18,8 @@ def fill_values(horizon_steps: int) -> dict[str, float]:
     return {
         "o_steps_since_last": float(horizon_steps + 1),  # "longer ago than we remember"
         "o_amount_z": 0.0,  # no history: not unusual
+        "g_dest_age": float(horizon_steps + 1),  # never seen: older than we remember
+        "g_dest_in_share_1d": 0.0,  # nothing received at all
     }
 
 

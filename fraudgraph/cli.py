@@ -196,7 +196,7 @@ def features_build() -> None:
     typer.echo(
         f"replayed {report.events:,} events in {report.seconds:.0f}s "
         f"({report.events / max(report.seconds, 1e-9):,.0f}/s); "
-        f"peak state keys {report.peak_state_keys:,}"
+        f"peak state keys {report.peak_state_keys:,}, peak memory {report.peak_memory_mb:,.0f} MB"
     )
 
 

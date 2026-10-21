@@ -43,16 +43,23 @@ class Decision:
     latency_ms: float = 0.0
 
 
+def check_engine_compatible(bundle_version: str, code_version: str) -> None:
+    """Same MAJOR, and the code's MINOR at least the bundle's (it only adds features)."""
+    b_major, b_minor = (int(x) for x in bundle_version.split(".")[:2])
+    c_major, c_minor = (int(x) for x in code_version.split(".")[:2])
+    if b_major != c_major or c_minor < b_minor:
+        raise BundleMismatchError(f"bundle engine {bundle_version} vs code engine {code_version}")
+
+
 class Scorer:
     def __init__(self, bundle_dir: Path, store: StateStore | None = None) -> None:
         self.manifest = verify_bundle(bundle_dir)
         spec_data = json.loads((bundle_dir / "feature_spec.json").read_text(encoding="utf-8"))
-        if spec_data["engine_version"] != ENGINE_VERSION:
-            raise BundleMismatchError(
-                f"bundle engine {spec_data['engine_version']} != code engine {ENGINE_VERSION}"
-            )
+        check_engine_compatible(spec_data["engine_version"], ENGINE_VERSION)
         self.spec = FeatureSpec(
-            windows=tuple(spec_data["windows"]), horizon_steps=spec_data["horizon_steps"]
+            windows=tuple(spec_data["windows"]),
+            horizon_steps=spec_data["horizon_steps"],
+            label_delay_steps=spec_data.get("label_delay_steps", 24),
         )
         self.version: str = self.manifest["version"]
         self.features: list[str] = self.manifest["features"]
@@ -61,6 +68,9 @@ class Scorer:
         policy = json.loads((bundle_dir / "policy.json").read_text(encoding="utf-8"))
         self.costs = CostParams(**policy["costs"])
         self.engine = FeatureEngine(self.spec, store or InMemoryStore(self.spec.horizon_steps))
+        missing = set(self.features) - set(self.engine.feature_names)
+        if missing:
+            raise BundleMismatchError(f"engine does not compute {sorted(missing)}")
 
     def score(self, event: Event, *, apply: bool = True) -> Decision:
         """Decide on `event`, then (by default) record it in state. Score first (D4)."""

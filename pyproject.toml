@@ -33,6 +33,7 @@ fgx = "fraudgraph.cli:app"
 [dependency-groups]
 dev = [
     "httpx>=0.27",
+    "hypothesis>=6.112",
     "mypy>=1.13",
     "poethepoet>=0.31",
     "pre-commit>=4.0",

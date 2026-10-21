@@ -191,3 +191,17 @@ def test_cors_can_be_disabled(bundle: Path, monkeypatch: pytest.MonkeyPatch) -> 
     client = TestClient(create_app(bundle))
     response = client.get("/health", headers={"Origin": "http://localhost:3000"})
     assert "access-control-allow-origin" not in response.headers
+
+
+@pytest.mark.parametrize(
+    ("bundle_version", "ok"),
+    [("1.2.0", True), ("1.3.0", True), ("1.3.7", True), ("1.4.0", False), ("2.0.0", False)],
+)
+def test_engine_compatibility_rule(bundle_version: str, ok: bool) -> None:
+    from fraudgraph.serving.scorer import check_engine_compatible
+
+    if ok:
+        check_engine_compatible(bundle_version, "1.3.0")
+    else:
+        with pytest.raises(BundleMismatchError):
+            check_engine_compatible(bundle_version, "1.3.0")
