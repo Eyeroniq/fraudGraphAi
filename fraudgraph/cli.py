@@ -103,6 +103,24 @@ def data_prepare(
     )
 
 
+@data_app.command("synth")
+def data_synth(
+    out: Annotated[Path, typer.Option(help="CSV to write (raw PaySim layout).")] = Path(
+        "data/fixture/paysim_fixture.csv"
+    ),
+    seed: Annotated[int, typer.Option(help="Generator seed; same seed, same bytes.")] = 7,
+) -> None:
+    """Write the seeded synthetic PaySim-format fixture (with planted mule rings)."""
+    from fraudgraph.data.download import sha256_of
+    from fraudgraph.data.synth import SynthConfig, generate, write_csv
+
+    result = generate(SynthConfig(seed=seed))
+    path = write_csv(result, out)
+    fraud = int(result.frame["isFraud"].sum())
+    typer.echo(f"{path}: rows={result.frame.height:,} fraud={fraud} sha256={sha256_of(path)}")
+    typer.echo(f"ring destinations: {', '.join(result.ring_destinations)}")
+
+
 @data_app.command("audit")
 def data_audit(
     probe: Annotated[

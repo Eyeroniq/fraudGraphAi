@@ -67,7 +67,7 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | **0.1** | Repo skeleton, tooling (uv, ruff, mypy, pre-commit, poe tasks) | ☑ 2026-10-21 · `poe check` green (10 tests, mypy strict) |
 | **0.2** | Data download with checksum + pandera schema | ☑ 2026-10-21 · hash pinned; 6,362,620 rows / 8,213 fraud pass the schema |
 | **0.3** | EDA + leakage audit (`docs/data_audit.md`) | ☑ 2026-10-21 · `amount == oldbalance_orig` alone AP 0.981; 5 plan changes applied |
-| **0.4** | Synthetic PaySim-schema fixture generator (for tests/CI) | ☐ |
+| **0.4** | Synthetic PaySim-schema fixture generator (for tests/CI) | ☑ 2026-10-21 · 20,052 rows, golden sha256 pinned; ring burst in-degree 12 vs ≤ 6 legit |
 | **0.5** | CI skeleton (lint + unit tests) | ☐ |
 | **1.1** | Time-based splits with label-delay embargo | ☐ |
 | **1.2** | Decision-time tabular features | ☐ |
@@ -485,6 +485,7 @@ The project `.gitignore` only lists project artifacts (`data/`, `reports/`, `art
 
 **0.4 Synthetic fixture** (`fraudgraph/data/synth.py`)
 - Seeded generator, ~20 k rows, same schema. Planted patterns: drain-and-transfer fraud, **mule ring** (k new destinations each receiving from many senders in a burst), legit merchant traffic, a daily cycle.
+- Mirrors the audit: single-use origins, reused destinations, fraud uniform over the day, sparse late days for legit only, drain fraud mostly to never-seen destinations. Ring transfers do **not** drain the sender, so only graph features can find them. Fraud rate ~1 % (higher than PaySim's 0.13 %) so small-sample tests have enough positives. `fgx data synth` writes it.
 - *Done when:* fixture rebuilds byte-identically from its seed, and a test asserts the ring is present.
 
 **0.5 CI skeleton** — `.github/workflows/ci.yml`: ruff, mypy, pytest (unit) on the fixture; uv cache.
