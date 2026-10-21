@@ -112,5 +112,5 @@ source = ["fraudgraph"]
 branch = true
 
 [[tool.mypy.overrides]]
-module = ["sklearn.*", "matplotlib.*"]
+module = ["sklearn.*", "matplotlib.*", "joblib.*"]
 ignore_missing_imports = true

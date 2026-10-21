@@ -71,7 +71,7 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | **0.5** | CI skeleton (lint + unit tests) | ☑ 2026-10-21 · PR #1 green on first run (lint, Ubuntu, Windows) |
 | **1.1** | Time-based splits with label-delay embargo | ☑ 2026-10-21 · test = steps 356–408 (626 fraud, 2.2 days → 6-step bootstrap blocks); late test 3,624 fraud |
 | **1.2** | Decision-time tabular features | ☑ 2026-10-21 · 13 T+O features, backfill 6.36 M events in 107 s; origin history on 0.09 % of rows |
-| **1.3** | Baselines: rule, logistic regression, LightGBM | ☐ |
+| **1.3** | Baselines: rule, logistic regression, LightGBM | ☑ 2026-10-21 · test AP: lgbm 0.357 (no hour 0.197), logreg 0.040, rule 0.005; prevalence 0.17 % |
 | **1.4** | Evaluation harness (PR-AUC, recall@P, block bootstrap CIs) | ☐ |
 | **1.5** | Cost model, calibration, cost-optimal threshold | ☐ |
 | **1.6** | MLflow tracking + model bundle format | ☐ |
@@ -523,7 +523,9 @@ The project `.gitignore` only lists project artifacts (`data/`, `reports/`, `art
 - B-rule: `dest_is_new & type ∈ {TRANSFER, CASH_OUT}` (destination never received money at an earlier step). Replaces the old `drains_account` rule, which is a D2 artifact.
 - **Hour ablation:** every baseline is also reported without `hour_of_day` (0.3: hour is inflated because legit traffic has a daily cycle and fraud does not).
 - B-lr: logistic regression (scaled, class-weighted).
-- **B-gbm:** LightGBM with `scale_pos_weight` vs. no weighting + later calibration (pick by `train_val` AP). Early stopping on `train_val`, Optuna (≤ 50 trials) on train-internal time folds. Calib and test are never used for model selection.
+- **B-gbm:** LightGBM with `scale_pos_weight` vs. no weighting + later calibration (pick by `train_val` AP). Early stopping on `train_val`, ~~Optuna (≤ 50 trials) on train-internal time folds~~ **seeded random search (20 trials, weighting ∈ {none, √ratio, ratio} is part of the space) on `train_val`**. Calib and test are never used for model selection. *(Changed 2026-10-21: 13 mostly-empty features do not justify Optuna's dependency weight; the seeded search is reproducible and fast.)*
+- B-rule input `dest_is_new` is computed in bulk (`features/novelty.py`) with the engine's semantics: no incoming transaction at an earlier step within the 7-day horizon. 3.2's G1-a feature must match it exactly.
+- `fgx train baselines` → `artifacts/baselines/` (models, `predictions.parquet` with one score column per model for train_val/calib/test/late_test, `summary.json`).
 
 **1.4 Evaluation harness** (`models/compare.py`, `fgx evaluate`)
 - Metrics: **average precision (PR-AUC)**, recall @ precision ∈ {0.5, 0.8, 0.9}, precision @ top-k alerts/day, $ fraud caught, total cost (A6), savings vs approve-all. ROC-AUC only as a footnote. **No accuracy anywhere.**

@@ -193,6 +193,58 @@ def features_build() -> None:
     )
 
 
+train_app = typer.Typer(help="Train models.", no_args_is_help=True)
+app.add_typer(train_app, name="train")
+
+
+@train_app.command("baselines")
+def train_baselines(
+    trials: Annotated[int, typer.Option(help="LightGBM random-search trials per variant.")] = 20,
+) -> None:
+    """Fit B-rule, B-lr and B-gbm (with and without hour) -> artifacts/baselines/."""
+    import polars as pl
+
+    from fraudgraph.data.prepare import PARQUET_NAME
+    from fraudgraph.data.splits import load_plan
+    from fraudgraph.features.spec import FeatureSpec
+    from fraudgraph.models.train import preview_ap, run_baselines, save, training_table
+
+    settings = get_settings()
+    data = settings.paths.data_dir
+    needed = {
+        "events": data / "processed" / PARQUET_NAME,
+        "features": data / "features" / "tabular.parquet",
+        "splits": data / "processed" / "splits.json",
+    }
+    missing = [str(p) for p in needed.values() if not p.is_file()]
+    if missing:
+        typer.echo(f"error: missing {missing}; run data prepare, split, features build.", err=True)
+        raise typer.Exit(1)
+
+    horizon = FeatureSpec().horizon_steps
+    table = training_table(
+        pl.read_parquet(needed["events"], columns=["txn_id", "step", "name_dest"]),
+        pl.read_parquet(needed["features"]),
+        load_plan(needed["splits"]),
+        horizon,
+    )
+    results, predictions, models = run_baselines(
+        table, horizon_steps=horizon, trials=trials, seed=settings.seed
+    )
+    out = settings.paths.artifacts_dir / "baselines"
+    save(out, results, predictions, models, {"trials": trials, "seed": settings.seed})
+
+    typer.echo(f"{out}")
+    typer.echo(f"{'model':<20} {'AP train_val':>12} {'AP test':>8} {'AP late':>8} {'secs':>6}")
+    previews = preview_ap(predictions, results)
+    for r in results:
+        p = previews[r.name]
+        typer.echo(
+            f"{r.name:<20} {p['train_val']:>12.4f} {p['test']:>8.4f} {p['late_test']:>8.4f} "
+            f"{r.seconds:>6.0f}"
+        )
+
+
 @app.command("split")
 def split() -> None:
     """Choose time-based splits with the label-delay embargo -> data/processed/splits.json."""
