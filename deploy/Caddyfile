@@ -1,0 +1,15 @@
+# Local walking skeleton: plain HTTP on 8080. HTTPS on a real domain comes in 9.4.
+:8080 {
+	encode gzip
+
+	# Same origin for page and API, so no CORS in production (D9).
+	handle_path /api/* {
+		reverse_proxy api:8000
+	}
+
+	handle {
+		root * /srv
+		try_files {path} {path}.html {path}/ /index.html
+		file_server
+	}
+}

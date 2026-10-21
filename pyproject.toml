@@ -78,6 +78,12 @@ data.sequence = [
 ]
 data.help = "Download PaySim (needs KAGGLE_USERNAME/KAGGLE_KEY) and build the parquet"
 
+up.cmd = "docker compose -f deploy/docker-compose.yml up -d --build"
+up.help = "Build and start the API + web page (http://localhost:8080)"
+
+down.cmd = "docker compose -f deploy/docker-compose.yml down"
+down.help = "Stop the compose stack"
+
 test.cmd = "pytest"
 test.help = "Run the test suite"
 

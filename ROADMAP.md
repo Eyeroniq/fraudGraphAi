@@ -77,8 +77,8 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | **1.6** | MLflow tracking + model bundle format | ☑ 2026-10-21 · bundle `lgbm-2026.10.21-<sha>`: model, calibrator, policy, feature spec, reference stats, hashed manifest |
 | **2.1** | `Scorer` (pure-Python inference) + artifact bundle loader | ☑ 2026-10-21 · online p equals offline backfill p (parity test); engine-version guard |
 | **2.2** | FastAPI `/v1/score`, `/health`, `/ready` | ☑ 2026-10-21 · idempotent on `txn_id`, 409 on out-of-order, error model; ~1 ms per score warm |
-| **2.3** | Dockerfile + compose (api only) + smoke test in CI | ☐ |
-| **2.4** | Minimal web page that calls `/v1/score` | ☐ |
+| **2.3** | Dockerfile + compose (api only) + smoke test in CI | ☑ 2026-10-21 · slim multi-stage non-root image; CI builds a fixture bundle and scores 3 txns |
+| **2.4** | Minimal web page that calls `/v1/score` | ☑ 2026-10-21 · static Next.js export behind Caddy, same-origin `/api` |
 | **3.0** | Pre-register the graph comparison rule (in this file) | ☐ |
 | **3.1** | Temporal feature engine (account state, incremental) | ☐ |
 | **3.2** | Hand-built graph features G1 (1-hop + 2-hop, windows) | ☐ |
@@ -559,6 +559,7 @@ container → web page → CI. Everything later plugs into this.
 - **2.3** `docker/api.Dockerfile` (multi-stage, slim, non-root, healthcheck), `deploy/docker-compose.yml` with `api` only. CI job: build image → run → `curl /ready` → score 3 fixture txns.
 - **2.4** `web/`: Next.js scaffold with one page — a form → `/v1/score` → shows the decision.
 - *Done when:* `uv run poe up` and opening the page shows a decision for a typed transaction, and CI runs the smoke test.
+- *Built (2.3–2.4):* `docker/api.Dockerfile` (uv, core deps only, libgomp, non-root, healthcheck; bundles mounted at `/app/artifacts`), `docker/web.Dockerfile` (Next.js static export → Caddy, which proxies `/api` to the API), `deploy/{docker-compose.yml,Caddyfile}`, `scripts/smoke_api.py`. CI adds `web` (tsc + build) and `docker-smoke` jobs. The compose stack includes the web page already, so `poe up` → http://localhost:8080. The API has an explicit CORS allow-list (`FG_CORS_ORIGINS`, default the local dev server) for `npm run dev`.
 
 ## Phase 3 — Graph features & GNN study
 

@@ -170,3 +170,24 @@ def test_openapi_documents_the_score_contract(client: TestClient) -> None:
     assert "/v1/score" in schema["paths"]
     props = schema["components"]["schemas"]["ScoreResponse"]["properties"]
     assert {"p_fraud", "decision", "expected_cost", "model_version"} <= set(props)
+
+
+def test_cors_allows_only_the_configured_origins(
+    bundle: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FG_CORS_ORIGINS", "http://localhost:3000")
+    client = TestClient(create_app(bundle))
+    preflight = {"Access-Control-Request-Method": "POST"}
+
+    ok = client.options("/v1/score", headers={"Origin": "http://localhost:3000", **preflight})
+    bad = client.options("/v1/score", headers={"Origin": "http://evil.example", **preflight})
+
+    assert ok.headers.get("access-control-allow-origin") == "http://localhost:3000"
+    assert "access-control-allow-origin" not in bad.headers
+
+
+def test_cors_can_be_disabled(bundle: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FG_CORS_ORIGINS", "")
+    client = TestClient(create_app(bundle))
+    response = client.get("/health", headers={"Origin": "http://localhost:3000"})
+    assert "access-control-allow-origin" not in response.headers

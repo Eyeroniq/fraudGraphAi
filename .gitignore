@@ -27,3 +27,4 @@ web/out/
 .env
 .env.*
 !.env.example
+web/*.tsbuildinfo

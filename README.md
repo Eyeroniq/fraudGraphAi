@@ -34,6 +34,17 @@ uv run fgx data prepare
 The first download prints the file's sha256. Pin it as `data.raw_sha256` in
 `configs/base.yaml` so every later run is checked against it.
 
+## Run the service
+
+```bash
+uv run fgx all --fixture --out artifacts/bundles   # a bundle from synthetic data (or `fgx bundle` after the real pipeline)
+uv run poe up                                      # API + web page; open http://localhost:8080
+uv run poe down
+```
+
+For UI work: `uv run uvicorn services.api.main:app` and, in `web/`,
+`NEXT_PUBLIC_API_BASE=http://localhost:8000 npm run dev` (http://localhost:3000).
+
 ## Configuration
 
 Settings come from [configs/base.yaml](configs/base.yaml). Override any value with an

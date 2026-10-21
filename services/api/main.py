@@ -14,6 +14,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from fraudgraph.config import get_settings
@@ -23,6 +24,8 @@ from fraudgraph.serving.scorer import Scorer
 from services.api.schemas import Health, Ready, ScoreRequest, ScoreResponse
 
 IDEMPOTENCY_CACHE = 100_000
+# Local web dev server (`npm run dev`). In compose the page is same-origin via Caddy (D9).
+DEFAULT_CORS_ORIGINS = "http://localhost:3000"
 
 
 def latest_bundle(root: Path) -> Path | None:
@@ -47,6 +50,18 @@ def error(status: int, code: str, message: str) -> JSONResponse:
 
 def create_app(bundle_dir: Path | None = None) -> FastAPI:
     app = FastAPI(title="FraudGraph API", version="0.2.0")
+    origins = [
+        o.strip()
+        for o in os.environ.get("FG_CORS_ORIGINS", DEFAULT_CORS_ORIGINS).split(",")
+        if o.strip()
+    ]
+    if origins:  # explicit allow-list only, never "*"
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_methods=["GET", "POST"],
+            allow_headers=["content-type"],
+        )
     state: dict[str, object] = {"scorer": None, "detail": None}
     lock = threading.Lock()  # in-memory state is not thread-safe; one writer at a time
     seen: OrderedDict[str, ScoreResponse] = OrderedDict()
