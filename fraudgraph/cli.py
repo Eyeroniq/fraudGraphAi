@@ -486,6 +486,41 @@ def all_cmd(
     typer.echo(str(fixture_bundle(out)))
 
 
+@app.command("graph-study")
+def graph_study_cmd(
+    trials: Annotated[int, typer.Option(help="LightGBM search trials per fit.")] = 20,
+    resamples: Annotated[int, typer.Option(help="Bootstrap resamples.")] = 1_000,
+) -> None:
+    """Run the 3.6 experiment matrix (E0-E5) -> reports/graph_study/results.json."""
+    import polars as pl
+
+    from fraudgraph.data.prepare import PARQUET_NAME
+    from fraudgraph.data.splits import load_plan
+    from fraudgraph.decision.costs import CostParams
+    from fraudgraph.models.graph_study import run_graph_study, save
+    from fraudgraph.tracking import tracked_run
+
+    settings = get_settings()
+    data = settings.paths.data_dir
+    results = run_graph_study(
+        pl.read_parquet(data / "processed" / PARQUET_NAME),
+        pl.read_parquet(data / "features" / "tabular.parquet"),
+        load_plan(data / "processed" / "splits.json"),
+        CostParams(**settings.costs.model_dump()),
+        trials=trials,
+        resamples=resamples,
+    )
+    out = settings.paths.reports_dir / "graph_study" / "results.json"
+    save(results, out)
+    with tracked_run("graph-study", data_sha256=_data_sha256(), task="3.6") as tracker:
+        tracker.params({"trials": trials, "resamples": resamples})
+        tracker.metrics({f"{k}.test_ap": v["test_ap"] for k, v in results["summary"].items()})
+        tracker.artifact(out)
+    typer.echo(f"{out}")
+    for name, verdict_text in results["verdicts"].items():
+        typer.echo(f"{name}: {verdict_text}")
+
+
 @app.command("split")
 def split() -> None:
     """Choose time-based splits with the label-delay embargo -> data/processed/splits.json."""

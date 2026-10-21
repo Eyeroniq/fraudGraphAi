@@ -83,9 +83,9 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | **3.1** | Temporal feature engine (account state, incremental) | ☑ 2026-10-21 · engine 1.3.0; full backfill 121 s, peak 4.27 M keys / 4.7 GB |
 | **3.2** | Hand-built graph features G1 (1-hop + 2-hop, windows) | ☑ 2026-10-21 · 13 `g_*` features (G1-a destination, G1-b known fraud, G1-c pair) |
 | **3.3** | Batch/online parity + leakage property tests | ☑ 2026-10-21 · hypothesis property tests, label-delay, novelty and 2,000-event parity, planted ring |
-| **3.4** | PyG graph build + temporal GraphSAGE/GINE edge classifier | ☐ |
-| **3.5** | Hybrid: GNN embeddings → LightGBM | ☐ |
-| **3.6** | Experiment matrix (3 seeds) + honest verdict (`docs/graph_study.md`) | ☐ |
+| **3.4** | PyG graph build + temporal GraphSAGE/GINE edge classifier | ☑ 2026-10-21 · causal neighbourhood GNN (GINE chosen); test AP 0.144, below E0 |
+| **3.5** | Hybrid: GNN embeddings → LightGBM | ☑ 2026-10-21 · out-of-fold embeddings with embargo; AP 0.484 but cost and late period worse than E1 |
+| **3.6** | Experiment matrix (3 seeds) + honest verdict (`docs/graph_study.md`) | ☑ 2026-10-21 · **E1 wins**: ΔAP +0.133 [+0.088, +0.157], Δcost −66 M; fails on injected rings (E4) |
 | **4.1** | MAPIE split conformal (marginal + class-conditional) | ☐ |
 | **4.2** | Three-way decision policy + review capacity | ☐ |
 | **4.3** | Coverage over time + review-load analysis | ☐ |
@@ -126,6 +126,7 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | 2026-10-16 | Native Windows dev: Python 3.12 via uv, `pyproject.toml` + `uv.lock` instead of `requirements*.in`, poe tasks instead of `make`, `.gitattributes` forcing LF, pre-commit hook shim. |
 | 2026-10-21 | From the [data audit](docs/data_audit.md): D2 now excludes the sender balance too; model splits inside steps 1–408 with 409–743 as late-period test; G1-a (destination novelty) is the core graph family, O and G1-b expected weak, `cash_out_after_transfer` dropped; hour-of-day ablation required; B-rule = new destination. |
 | 2026-10-21 | A6 costs rescaled to PaySim amounts: `c_review` 5 → 2,000, `c_friction` 50 → 20,000 (the old values review 71–99 % of traffic). Champion = `lgbm` (hour allowed, ablation always reported). |
+| 2026-10-21 | Graph study: E1 (T+O+G1) wins by the pre-registered rule; GNN (E3) loses and the hybrid (E2) adds no robust gain beyond G1; E1 fails on injected mule rings (E4). Champion candidate for 7.5: E1 without G1-b (servable before `/v1/labels`). |
 
 ---
 
@@ -600,14 +601,13 @@ it captures and why it is decision-time safe.
 - **Temporal correctness:** `LinkNeighborLoader` with `edge_label_time` + `time_attr` so each target edge only samples strictly earlier edges. Train on the train window. Calib/test edges sample from the full past. Unseen accounts get cold-start embeddings (count how many).
 - CPU-friendly: subsample legit edges for training (keep all fraud), cap the fan-out (e.g. [15, 10]).
 
+- *Built (3.4):* `fraudgraph/graph/{sampler,models,train}.py`. PyG's temporal `LinkNeighborLoader` needs the compiled `pyg-lib`, which has no Windows wheels, so the causal neighbourhood is built directly: for each target edge u→v, the last `k = 10` edges into v at **strictly earlier steps within the horizon**, with neighbour fraud labels only once known (same rule as the engine). Senders are single-use on PaySim, so this is the whole useful neighbourhood (a 2-hop expansion adds nothing). Two variants on PyG aggregation layers: **SAGE** (mean + max of neighbour messages) and **GINE** (messages conditioned on the target edge, summed); the better one on `train_val` is used for all seeds. Training: all fraud + 30 legit per fraud, weighted BCE, early stopping on `train_val` AP.
+
 **3.5 Hybrid** — export the GNN edge embedding (32-d) → append to LightGBM features (B-gbm+G2). This is
 often the strongest way to use a GNN, but two traps must be handled:
 - **Stacking leak:** embeddings for *training* rows must be out-of-fold (GNN trained on earlier time
   folds, embedding later ones). Embeddings from a GNN that saw those rows' labels make E2 look far too good.
-- **Servability:** online, there is no time to run neighbour sampling per request. The servable form
-  is per-account node embeddings recomputed in batch (e.g. daily), looked up from Redis, with
-  cold-start vectors for new accounts. E2 must be evaluated with **that** staleness (embeddings only
-  from data before the last refresh), or its offline number will not match production.
+- **Servability:** *(revised)* because the neighbourhood is causal by construction and small (≤ 10 earlier edges into the destination), it can be gathered per request from the same state the engine keeps, so the GNN can run online with no stale embeddings; its p95 latency is measured in 3.6. The out-of-fold rule below still applies to training the hybrid.
 
 **3.6 Experiment matrix & verdict** → `docs/graph_study.md`
 
