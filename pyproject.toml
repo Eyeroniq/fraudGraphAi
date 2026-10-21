@@ -129,3 +129,13 @@ branch = true
 [[tool.mypy.overrides]]
 module = ["sklearn.*", "matplotlib.*", "joblib.*", "torch_geometric.*"]
 ignore_missing_imports = true
+
+# CPU-only PyTorch on Linux (CI, Docker): PyPI's default Linux wheel pulls several GB of
+# CUDA libraries. PyPI's Windows/macOS wheels are already CPU-only.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
