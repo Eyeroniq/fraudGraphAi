@@ -155,6 +155,44 @@ def data_audit(
         typer.echo(f"figure: {path}")
 
 
+features_app = typer.Typer(help="Decision-time features.", no_args_is_help=True)
+app.add_typer(features_app, name="features")
+
+
+@features_app.command("build")
+def features_build() -> None:
+    """Replay all events through the feature engine -> data/features/tabular.parquet."""
+    import polars as pl
+
+    from fraudgraph.data.prepare import PARQUET_NAME
+    from fraudgraph.features.backfill import backfill
+    from fraudgraph.features.spec import FeatureSpec
+
+    settings = get_settings()
+    parquet = settings.paths.data_dir / "processed" / PARQUET_NAME
+    if not parquet.is_file():
+        typer.echo(f"error: {parquet} not found; run `fgx data prepare` first.", err=True)
+        raise typer.Exit(1)
+
+    spec = FeatureSpec()
+    table, report = backfill(pl.read_parquet(parquet), spec)
+    out = settings.paths.data_dir / "features" / "tabular.parquet"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    table.write_parquet(out, compression="zstd")
+    (out.parent / "tabular.spec.json").write_text(
+        json.dumps({"engine_version": spec.version, "windows": list(spec.windows),
+                    "horizon_steps": spec.horizon_steps,
+                    "label_delay_steps": settings.label_delay_steps}, indent=2) + "\n",
+        encoding="utf-8",
+    )  # fmt: skip
+    typer.echo(f"{out}: {report.feature_rows:,} rows x {table.width - 3} features")
+    typer.echo(
+        f"replayed {report.events:,} events in {report.seconds:.0f}s "
+        f"({report.events / max(report.seconds, 1e-9):,.0f}/s); "
+        f"peak state keys {report.peak_state_keys:,}"
+    )
+
+
 @app.command("split")
 def split() -> None:
     """Choose time-based splits with the label-delay embargo -> data/processed/splits.json."""

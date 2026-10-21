@@ -70,7 +70,7 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | **0.4** | Synthetic PaySim-schema fixture generator (for tests/CI) | ☑ 2026-10-21 · 20,052 rows, golden sha256 pinned; ring burst in-degree 12 vs ≤ 6 legit |
 | **0.5** | CI skeleton (lint + unit tests) | ☑ 2026-10-21 · PR #1 green on first run (lint, Ubuntu, Windows) |
 | **1.1** | Time-based splits with label-delay embargo | ☑ 2026-10-21 · test = steps 356–408 (626 fraud, 2.2 days → 6-step bootstrap blocks); late test 3,624 fraud |
-| **1.2** | Decision-time tabular features | ☐ |
+| **1.2** | Decision-time tabular features | ☑ 2026-10-21 · 13 T+O features, backfill 6.36 M events in 107 s; origin history on 0.09 % of rows |
 | **1.3** | Baselines: rule, logistic regression, LightGBM | ☐ |
 | **1.4** | Evaluation harness (PR-AUC, recall@P, block bootstrap CIs) | ☐ |
 | **1.5** | Cost model, calibration, cost-optimal threshold | ☐ |
@@ -258,6 +258,7 @@ class FeatureEngine:
 
 - `StateStore` has two implementations: `InMemoryStore` (backfill, tests) and `RedisStore` (API).
 - **Windows** are bucketed by step (1 h, 24 h, 7 d) as ring buffers, so updates are O(1).
+- **Horizon (state TTL):** history older than `horizon_steps` (default 168 = 7 d) is dropped and idle keys are evicted, offline and online alike (Redis uses the same TTL). Origin features are defined over this horizon; this keeps backfill memory bounded (PaySim has 6.35 M distinct origins).
 - **Within-step rule:** events in the same step do not see each other. Every write lands in the bucket
   for its own step, and `features(ev)` only aggregates buckets with `step < ev.step`. Scalar facts
   (`first_seen_step`, last orig→dest step) are stored with their step and compared the same way, so
@@ -516,6 +517,7 @@ The project `.gitignore` only lists project artifacts (`data/`, `reports/`, `art
 
 **1.2 Decision-time tabular features** — families T and O from A5, through the `FeatureEngine` (3.1 starts here, without graph families).
 - Model only on `TRANSFER` + `CASH_OUT` (the only types with fraud). Other types score as "low risk by rule" but **still update the state** (they are graph edges).
+- Built (engine `1.2.0`): `t_log_amount`, `t_is_transfer`, `t_hour`, `t_amount_at_cap`; `o_n_{1h,1d,1w}`, `o_log_sum_{1h,1d,1w}`, `o_first_seen`, `o_steps_since_last`, `o_amount_z`. `fgx features build` → `data/features/tabular.parquet` (+ `tabular.spec.json`). The destination-novelty flag that the new B-rule needs arrives with G1-a in 3.2; 1.3 can compute it directly until then.
 
 **1.3 Baselines**
 - B-rule: `dest_is_new & type ∈ {TRANSFER, CASH_OUT}` (destination never received money at an earlier step). Replaces the old `drains_account` rule, which is a D2 artifact.
