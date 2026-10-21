@@ -19,7 +19,10 @@ dependencies = [
 
 [project.optional-dependencies]
 research = [
+    "alembic>=1.13",
     "matplotlib>=3.9",
+    "mlflow-skinny>=2.17",
+    "sqlalchemy>=2.0",
 ]
 
 [project.scripts]

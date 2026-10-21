@@ -18,6 +18,13 @@ app.add_typer(config_app, name="config")
 app.add_typer(data_app, name="data")
 
 
+def _data_sha256() -> str | None:
+    meta = get_settings().paths.data_dir / "processed" / "paysim.meta.json"
+    if not meta.is_file():
+        return None
+    return str(json.loads(meta.read_text(encoding="utf-8"))["source_sha256"])
+
+
 @app.command()
 def version() -> None:
     """Print the package version."""
@@ -231,12 +238,24 @@ def train_baselines(
     results, predictions, models = run_baselines(
         table, horizon_steps=horizon, trials=trials, seed=settings.seed
     )
+    from fraudgraph.tracking import tracked_run
+
     out = settings.paths.artifacts_dir / "baselines"
     save(out, results, predictions, models, {"trials": trials, "seed": settings.seed})
+    previews = preview_ap(predictions, results)
+    with tracked_run("baselines", data_sha256=_data_sha256(), task="1.3") as tracker:
+        tracker.params({"trials": trials, "seed": settings.seed, "horizon_steps": horizon})
+        for r in results:
+            tracker.metrics(
+                {
+                    f"{r.name}.val_ap": r.val_ap,
+                    **{f"{r.name}.{k}_ap": v for k, v in previews[r.name].items()},
+                }
+            )
+        tracker.artifact(out / "summary.json")
 
     typer.echo(f"{out}")
     typer.echo(f"{'model':<20} {'AP train_val':>12} {'AP test':>8} {'AP late':>8} {'secs':>6}")
-    previews = preview_ap(predictions, results)
     for r in results:
         p = previews[r.name]
         typer.echo(
@@ -347,6 +366,21 @@ def policy_cmd(
     save(out, report_dir, calibrator, policy, report)
     write_plots(frame, name, calibrator, costs, report_dir)
 
+    from fraudgraph.tracking import tracked_run
+
+    with tracked_run(f"policy-{name}", data_sha256=_data_sha256(), task="1.5") as tracker:
+        tracker.params(
+            {"model": name, **policy["costs"], "global_threshold": policy["global_threshold"]}
+        )
+        tracker.metrics(
+            {f"test.{rule}.cost": r["cost"]["total"] for rule, r in report["test"].items()}
+            | {
+                f"test.{rule}.review_share": r["action_share"]["REVIEW"]
+                for rule, r in report["test"].items()
+            }
+        )
+        tracker.artifact(report_dir / "policy_report.json")
+
     typer.echo(f"{out}  (global threshold on calibrated p: {policy['global_threshold']:.4g})")
     for split, stats in report["calibration"].items():
         line = "  ".join(
@@ -364,6 +398,70 @@ def policy_cmd(
             f"{r['action_share']['REVIEW']:>7.2%} {r['action_share']['BLOCK']:>6.2%} "
             f"{r['fraud_amount_stopped_share']:>8.1%}"
         )
+
+
+@app.command("bundle")
+def bundle_cmd(
+    model: Annotated[str | None, typer.Option(help="Model to package (default: champion).")] = None,
+) -> None:
+    """Package the champion into artifacts/bundles/<version>/ (the only thing the API loads)."""
+    import polars as pl
+
+    from fraudgraph.data.splits import assign_split, load_plan
+    from fraudgraph.models.bundle import write_bundle
+    from fraudgraph.tracking import git_sha, tracked_run
+
+    settings = get_settings()
+    name = model or settings.champion
+    arts, reports, data = (
+        settings.paths.artifacts_dir,
+        settings.paths.reports_dir,
+        settings.paths.data_dir,
+    )
+    needed = {
+        "booster": arts / "baselines" / f"{name}.txt",
+        "calibrator": arts / "policy" / name / "calibrator.joblib",
+        "policy": arts / "policy" / name / "policy.json",
+        "features": data / "features" / "tabular.parquet",
+        "spec": data / "features" / "tabular.spec.json",
+        "splits": data / "processed" / "splits.json",
+    }
+    missing = [str(p) for p in needed.values() if not p.is_file()]
+    if missing:
+        typer.echo(f"error: missing {missing}; run train baselines and policy first.", err=True)
+        raise typer.Exit(1)
+
+    metrics: dict[str, object] = {}
+    eval_path = reports / "eval" / "baselines" / "metrics.json"
+    if eval_path.is_file():
+        evaluation = json.loads(eval_path.read_text(encoding="utf-8"))
+        metrics["eval"] = {
+            split: data_["models"].get(name, {}) for split, data_ in evaluation["splits"].items()
+        }
+    policy_report = reports / "eval" / f"policy_{name}" / "policy_report.json"
+    if policy_report.is_file():
+        metrics["policy_test"] = json.loads(policy_report.read_text(encoding="utf-8"))["test"]
+
+    train = assign_split(pl.read_parquet(needed["features"]), load_plan(needed["splits"])).filter(
+        pl.col("split") == "train_fit"
+    )
+    sha = git_sha()
+    path = write_bundle(
+        arts / "bundles",
+        model=name,
+        booster_path=needed["booster"],
+        calibrator_path=needed["calibrator"],
+        policy_path=needed["policy"],
+        feature_spec=json.loads(needed["spec"].read_text(encoding="utf-8")),
+        train_features=train,
+        metrics=metrics,
+        data_sha256=_data_sha256() or "unknown",
+        git_sha=sha,
+    )
+    with tracked_run(f"bundle-{name}", data_sha256=_data_sha256(), task="1.6") as tracker:
+        tracker.params({"model": name, "bundle": path.name})
+        tracker.artifact(path)
+    typer.echo(f"{path}")
 
 
 @app.command("split")

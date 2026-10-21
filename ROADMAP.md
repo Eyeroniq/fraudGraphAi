@@ -74,7 +74,7 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | **1.3** | Baselines: rule, logistic regression, LightGBM | ☑ 2026-10-21 · test AP: lgbm 0.357 (no hour 0.197), logreg 0.040, rule 0.005; prevalence 0.17 % |
 | **1.4** | Evaluation harness (PR-AUC, recall@P, block bootstrap CIs) | ☑ 2026-10-21 · test AP lgbm_no_hour 0.197 [0.117, 0.295] (9 blocks); golden-number test pinned |
 | **1.5** | Cost model, calibration, cost-optimal threshold | ☑ 2026-10-21 · test cost: EC rule 130 M vs global 218 M vs approve-all 1,082 M; review 4.4 % ([policy](docs/policy.md)) |
-| **1.6** | MLflow tracking + model bundle format | ☐ |
+| **1.6** | MLflow tracking + model bundle format | ☑ 2026-10-21 · bundle `lgbm-2026.10.21-<sha>`: model, calibrator, policy, feature spec, reference stats, hashed manifest |
 | **2.1** | `Scorer` (pure-Python inference) + artifact bundle loader | ☐ |
 | **2.2** | FastAPI `/v1/score`, `/health`, `/ready` | ☐ |
 | **2.3** | Dockerfile + compose (api only) + smoke test in CI | ☐ |
@@ -546,6 +546,7 @@ The project `.gitignore` only lists project artifacts (`data/`, `reports/`, `art
 - *Built:* `fgx policy` → `artifacts/policy/<model>/{calibrator.joblib, policy.json}` and `reports/eval/policy_<model>/` (report, cost-vs-threshold and reliability plots). The global threshold is an alert threshold (alert → REVIEW). Cost CIs come from the same block bootstrap as 1.4.
 
 **1.6 MLflow + bundle** — every run logs params, metrics, the data hash and the git sha. `fgx bundle` writes the A3 bundle.
+- *Built:* `fraudgraph/tracking.py` wraps MLflow (no-op when it is not installed, e.g. in the serving image). MLflow 3 refuses the plain file store, so tracking uses `sqlite:///mlruns/mlflow.db` (`mlflow-skinny` + SQLAlchemy/Alembic in the `research` extra). `fgx bundle` writes `artifacts/bundles/<model>-<date>-<sha7>/` with a manifest that hashes every file; `verify_bundle` refuses a tampered bundle.
 
 ## Phase 2 — Walking skeleton (end-to-end, thin)
 
