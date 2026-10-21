@@ -155,5 +155,50 @@ def data_audit(
         typer.echo(f"figure: {path}")
 
 
+@app.command("split")
+def split() -> None:
+    """Choose time-based splits with the label-delay embargo -> data/processed/splits.json."""
+    import polars as pl
+
+    from fraudgraph.data.prepare import META_NAME, PARQUET_NAME
+    from fraudgraph.data.splits import SplitError, plan_splits
+
+    settings = get_settings()
+    processed = settings.paths.data_dir / "processed"
+    parquet = processed / PARQUET_NAME
+    if not parquet.is_file():
+        typer.echo(f"error: {parquet} not found; run `fgx data prepare` first.", err=True)
+        raise typer.Exit(1)
+
+    frame = pl.read_parquet(parquet, columns=["step", "type", "is_fraud"])
+    try:
+        plan = plan_splits(frame, settings.splits, settings.label_delay_steps)
+    except SplitError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+    meta = json.loads((processed / META_NAME).read_text(encoding="utf-8"))
+    out = processed / "splits.json"
+    out.write_text(
+        plan.to_json(
+            source_sha256=meta["source_sha256"],
+            settings=settings.splits.model_dump(),
+        ),
+        encoding="utf-8",
+    )
+    typer.echo(f"{out}")
+    typer.echo(f"{'split':<10} {'steps':>9} {'T+CO rows':>10} {'fraud':>6} {'prevalence':>10}")
+    for name, step_range in plan.ranges.items():
+        s = plan.stats[name]
+        typer.echo(
+            f"{name:<10} {step_range.start:>4}-{step_range.end:<4} {s.modelled_rows:>10,} "
+            f"{s.fraud:>6,} {s.prevalence:>10.4%}"
+        )
+    typer.echo(
+        f"embargo: {plan.label_delay_steps} steps; test covers {plan.test_days:.1f} days "
+        f"-> bootstrap blocks of {plan.bootstrap_block_steps} steps"
+    )
+
+
 if __name__ == "__main__":
     app()

@@ -69,7 +69,7 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | **0.3** | EDA + leakage audit (`docs/data_audit.md`) | ☑ 2026-10-21 · `amount == oldbalance_orig` alone AP 0.981; 5 plan changes applied |
 | **0.4** | Synthetic PaySim-schema fixture generator (for tests/CI) | ☑ 2026-10-21 · 20,052 rows, golden sha256 pinned; ring burst in-degree 12 vs ≤ 6 legit |
 | **0.5** | CI skeleton (lint + unit tests) | ☑ 2026-10-21 · PR #1 green on first run (lint, Ubuntu, Windows) |
-| **1.1** | Time-based splits with label-delay embargo | ☐ |
+| **1.1** | Time-based splits with label-delay embargo | ☑ 2026-10-21 · test = steps 356–408 (626 fraud, 2.2 days → 6-step bootstrap blocks); late test 3,624 fraud |
 | **1.2** | Decision-time tabular features | ☐ |
 | **1.3** | Baselines: rule, logistic regression, LightGBM | ☐ |
 | **1.4** | Evaluation harness (PR-AUC, recall@P, block bootstrap CIs) | ☐ |
@@ -512,6 +512,7 @@ The project `.gitignore` only lists project artifacts (`data/`, `reports/`, `art
 - Steps 409–743 are the **late-period test**, reported separately as a natural prevalence shift (never used for fitting, calibration or conformal).
 - Record prevalence per split in `splits.json`. Make sure the test window covers enough 24-step days for the block bootstrap (≥ 10 blocks); if not, use 6-step blocks and say so.
 - *Done when:* a test asserts `max(train.step) + L < min(calib_a.step)`, `calib_a` and `calib_b` do not overlap, and no `txn_id` is in two splits.
+- *Result:* `fgx split` → `data/processed/splits.json`. On PaySim: train_fit 1–236, train_val 261–280, calib_a 305–330, calib_b 331–355, test 356–408, late_test 409–743 (embargoes 237–260, 281–304). The dense test window is only 2.2 days, so the bootstrap uses 6-step blocks (~9 blocks): expect wide CIs, and report them as they are.
 
 **1.2 Decision-time tabular features** — families T and O from A5, through the `FeatureEngine` (3.1 starts here, without graph families).
 - Model only on `TRANSFER` + `CASH_OUT` (the only types with fraud). Other types score as "low risk by rule" but **still update the state** (they are graph edges).

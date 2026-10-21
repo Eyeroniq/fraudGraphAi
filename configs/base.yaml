@@ -18,6 +18,17 @@ data:
   # sha256 of the raw CSV (Kaggle ealaxi/paysim1, 493,534,783 bytes), pinned 2026-10-21.
   raw_sha256: 16910f90577b0d981bf8ff289714510bb89bc71bff7d3f220f024e287e4eea6b
 
+# Time-based splits (task 1.1). Shares are of TRANSFER + CASH_OUT rows in steps
+# 1..dense_last_step; later steps are the late-period test. The embargo between
+# training and calibration is label_delay_steps.
+splits:
+  dense_last_step: 408
+  train_share: 0.70
+  calib_share: 0.15
+  train_val_share: 0.15
+  calib_a_share: 0.5
+  min_test_days: 10
+
 mlflow:
   tracking_uri: sqlite:///mlruns/mlflow.db
   experiment: fraudgraph

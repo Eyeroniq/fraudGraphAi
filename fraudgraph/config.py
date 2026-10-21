@@ -48,6 +48,18 @@ class DataSettings(BaseModel):
     raw_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
+class SplitSettings(BaseModel):
+    """Time-based splits (task 1.1). Shares are of modelled rows (TRANSFER + CASH_OUT)
+    inside the dense period; see docs/data_audit.md for why the period ends at 408."""
+
+    dense_last_step: int = Field(default=408, ge=1)
+    train_share: float = Field(default=0.70, gt=0, lt=1)
+    calib_share: float = Field(default=0.15, gt=0, lt=1)  # test gets the rest
+    train_val_share: float = Field(default=0.15, gt=0, lt=1)  # last part of train
+    calib_a_share: float = Field(default=0.5, gt=0, lt=1)  # first part of calib
+    min_test_days: int = Field(default=10, ge=1)  # else bootstrap uses 6-step blocks
+
+
 class MlflowSettings(BaseModel):
     tracking_uri: str = "sqlite:///mlruns/mlflow.db"
     experiment: str = "fraudgraph"
@@ -65,6 +77,7 @@ class Settings(BaseSettings):
     label_delay_steps: int = Field(default=24, ge=0)
     paths: Paths = Field(default_factory=Paths)
     data: DataSettings = Field(default_factory=DataSettings)
+    splits: SplitSettings = Field(default_factory=SplitSettings)
     mlflow: MlflowSettings = Field(default_factory=MlflowSettings)
 
     @classmethod
