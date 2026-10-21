@@ -1,0 +1,64 @@
+# Reason codes (task 5.1): feature groups -> one human-readable reason each.
+# SHAP values are summed per group, so a reason is never three variants of one idea.
+# `text` is formatted with the payment's own values; `when` picks a variant (first match).
+# Placeholders: any feature name, plus {amount} and {type} from the request.
+# Feature names a group lists but the model does not use are simply ignored.
+
+groups:
+  - code: DEST_HISTORY
+    label: Receiving account history
+    # One idea measured several ways (novelty, recent volume, distinct senders): one reason.
+    features: [g_dest_is_new, g_dest_age, g_dest_in_n_1h, g_dest_in_n_1d, g_dest_in_n_1w,
+               g_dest_log_in_sum, g_dest_in_share_1d, g_dest_senders_1d, g_dest_senders_1w]
+    variants:
+      - when: "g_dest_is_new == 1"
+        text: "Receiving account has not received any payment in the last 7 days"
+      - text: "Receiving account got {g_dest_in_n_1d:.0f} payments from {g_dest_senders_1d:.0f} senders in the last 24 h ({g_dest_in_n_1w:.0f} in 7 days)"
+
+  - code: DEST_SENDS
+    label: Receiving account also pays out
+    features: [g_dest_out_n]
+    variants:
+      - text: "Receiving account made {g_dest_out_n:.0f} payments of its own in the last 7 days"
+
+  - code: KNOWN_FRAUD
+    label: Receiving account got confirmed fraud
+    features: [g_dest_known_fraud_in]
+    variants:
+      - text: "Receiving account received {g_dest_known_fraud_in:.0f} payments already confirmed as fraud"
+
+  - code: PAIR_HISTORY
+    label: Sender paid this receiver before
+    features: [g_pair_n]
+    variants:
+      - when: "g_pair_n == 0"
+        text: "Sender has never paid this receiving account before"
+      - text: "Sender paid this receiving account {g_pair_n:.0f} times in the last 7 days"
+
+  - code: AMOUNT
+    label: Amount
+    features: [t_log_amount, t_amount_at_cap]
+    variants:
+      - when: "t_amount_at_cap == 1"
+        text: "Amount is exactly the 10,000,000 maximum"
+      - text: "Amount {amount:,.0f} is in a range where fraud is more common"
+
+  - code: PAYMENT_TYPE
+    label: Payment type
+    features: [t_is_transfer]
+    variants:
+      - text: "{type} payments carry more fraud"
+
+  - code: TIME_OF_DAY
+    label: Time of day
+    features: [t_hour]
+    variants:
+      - text: "Time of day ({t_hour:.0f}:00) raises the risk score for this payment"
+
+  - code: SENDER_HISTORY
+    label: Sender history
+    features: [o_n_1h, o_n_1d, o_n_1w, o_log_sum_1h, o_log_sum_1d, o_log_sum_1w, o_first_seen, o_steps_since_last, o_amount_z]
+    variants:
+      - when: "o_first_seen == 1"
+        text: "Sender has no payment history in the last 7 days"
+      - text: "Sender made {o_n_1w:.0f} payments in the last 7 days"

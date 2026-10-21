@@ -44,6 +44,10 @@ class ScoreResponse(BaseModel):
         description='Conformal set: ["legit"], ["fraud"], both ("model uncertain") or [] (empty).',
     )
     reasons: list[Reason] = []
+    explanation_stable: bool | None = Field(
+        default=None,
+        description="False when the top reasons would likely change under a refit (5.2).",
+    )
     latency_ms: float
 
 

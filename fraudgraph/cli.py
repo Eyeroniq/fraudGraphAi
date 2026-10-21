@@ -453,6 +453,7 @@ def bundle_cmd(
         calibrator_path=needed["calibrator"],
         policy_path=needed["policy"],
         conformal_path=arts / "policy" / name / "conformal.json",
+        explain_dir=arts / "explain" / name,
         feature_spec=json.loads(needed["spec"].read_text(encoding="utf-8")),
         train_features=train,
         metrics=metrics,
@@ -634,6 +635,76 @@ def conformal_cmd(
             f"review {shares['REVIEW']:.2%} step-up {shares['STEP_UP']:.2%} "
             f"block {shares['BLOCK']:.2%}"
         )
+
+
+@app.command("explain")
+def explain_cmd(
+    model: Annotated[str | None, typer.Option(help="Model (default: champion).")] = None,
+    flagged: Annotated[int, typer.Option(help="Flagged test payments for stability.")] = 2_000,
+    quality_rows: Annotated[int, typer.Option(help="Payments for quality metrics.")] = 500,
+) -> None:
+    """SHAP reason codes, stability and explanation quality -> reports/explain/<model>/."""
+    import lightgbm as lgb
+    import polars as pl
+
+    from fraudgraph.config import REPO_ROOT
+    from fraudgraph.data.prepare import PARQUET_NAME
+    from fraudgraph.data.splits import assign_split, load_plan
+    from fraudgraph.explain import report as explain_report
+    from fraudgraph.explain.reasons import ReasonCodes
+    from fraudgraph.features.spec import FeatureSpec
+    from fraudgraph.tracking import tracked_run
+
+    settings = get_settings()
+    name = model or settings.champion
+    data, arts = settings.paths.data_dir, settings.paths.artifacts_dir
+    booster = lgb.Booster(model_file=str(arts / "baselines" / f"{name}.txt"))
+    reason_codes = REPO_ROOT / "configs" / "reason_codes.yaml"
+    codes = ReasonCodes.load(reason_codes, booster.feature_name())
+    calibrator, policy_config = explain_report.policy_from_artifacts(arts / "policy" / name)
+    events = pl.read_parquet(
+        data / "processed" / PARQUET_NAME, columns=["txn_id", "amount", "type"]
+    )
+    table = assign_split(
+        pl.read_parquet(data / "features" / "tabular.parquet"),
+        load_plan(data / "processed" / "splits.json"),
+    ).join(events, on="txn_id", how="left", maintain_order="left")
+    horizon = FeatureSpec().horizon_steps
+    report, background = explain_report.run(
+        table,
+        booster,
+        codes,
+        calibrator,
+        policy_config,
+        horizon_steps=horizon,
+        n_flagged=flagged,
+        n_quality=quality_rows,
+        seed=settings.seed,
+    )
+    report_dir = settings.paths.reports_dir / "explain" / name
+    explain_report.save(report, background, reason_codes, arts / "explain" / name, report_dir)
+    explain_report.write_plots(booster, table, report, horizon, report_dir)
+    with tracked_run(f"explain-{name}", data_sha256=_data_sha256(), task="5") as tracker:
+        tracker.metrics(
+            {
+                "seed_median_jaccard": report["seed_stability"]["median_jaccard"],
+                "shap_faithfulness": report["quality"]["shap"]["faithfulness"]["mean"],
+            }
+        )
+        tracker.artifact(report_dir / "report.json")
+    s = report["seed_stability"]
+    typer.echo(f"{report_dir}")
+    typer.echo(
+        "SHAP vs shap.TreeExplainer max |diff|: "
+        f"{report['shap_check']['max_abs_diff_vs_shap_tree_explainer']:.2e}"
+    )
+    typer.echo(
+        f"seed stability: median Jaccard {s['median_jaccard']:.3f}, "
+        f"share >= 0.8 {s['share_jaccard_ge_0.8']:.1%}, median tau {s['median_tau']:.3f}"
+    )
+    for method, metrics in report["quality"].items():
+        line = "  ".join(f"{k} {v['mean']:.3f}" for k, v in metrics.items())
+        typer.echo(f"{method:<12} {line}")
 
 
 @app.command("split")

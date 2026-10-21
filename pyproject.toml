@@ -25,6 +25,8 @@ research = [
     "mapie>=1.0",
     "matplotlib>=3.9",
     "mlflow-skinny>=2.17",
+    "quantus>=0.5",
+    "shap>=0.46",
     "sqlalchemy>=2.0",
     "torch>=2.4",
     "torch-geometric>=2.6",
@@ -140,3 +142,8 @@ explicit = true
 
 [tool.uv.sources]
 torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.mypy.overrides]]
+module = ["quantus", "quantus.*", "shap", "shap.*", "scipy", "scipy.*"]
+ignore_missing_imports = true
+follow_imports = "skip"

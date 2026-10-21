@@ -7,13 +7,14 @@ can be smoke-tested without the real dataset, D10) and by the API tests.
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import joblib
 import numpy as np
 import polars as pl
 
-from fraudgraph.config import SplitSettings
+from fraudgraph.config import REPO_ROOT, SplitSettings
 from fraudgraph.data.prepare import to_canonical
 from fraudgraph.data.splits import assign_split, plan_splits
 from fraudgraph.data.synth import SynthConfig, generate
@@ -86,6 +87,8 @@ def build_bundle(
     booster.save_model(str(work / "model.txt"), num_iteration=booster.best_iteration)
     joblib.dump(calibrator, work / "calibrator.joblib")
     conformal.save(conformal_model, work / "conformal.json")
+    shutil.copyfile(REPO_ROOT / "configs" / "reason_codes.yaml", work / "reason_codes.yaml")
+    (work / "explain.json").write_text('{"stability_gap_threshold": 0.0}\n', encoding="utf-8")
     policy = {
         "model": model_name,
         "calibration": "isotonic",
@@ -111,6 +114,7 @@ def build_bundle(
         calibrator_path=work / "calibrator.joblib",
         policy_path=work / "policy.json",
         conformal_path=work / "conformal.json",
+        explain_dir=work,
         feature_spec=feature_spec,
         train_features=parts["train_fit"],
         metrics={"source": "synthetic fixture"},

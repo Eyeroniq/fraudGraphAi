@@ -138,6 +138,25 @@ export default function ScorePage() {
             Fraud probability {(result.p_fraud * 100).toFixed(3)} % · {REASON[result.decision_reason] ?? result.decision_reason} · model{" "}
             {result.model_version} · {result.latency_ms.toFixed(1)} ms
           </p>
+          {result.reasons.length > 0 && (
+            <>
+              <h2 className="subhead">Why</h2>
+              <ol className="reasons">
+                {result.reasons.map((r) => (
+                  <li key={r.code}>
+                    {r.text}
+                    {r.impact > 0 && <span className="muted"> (+{r.impact.toFixed(2)} risk)</span>}
+                  </li>
+                ))}
+              </ol>
+              {result.explanation_stable === false && (
+                <p className="muted">
+                  ⚠ These reasons are close to each other in weight; their order may change if the model
+                  is retrained.
+                </p>
+              )}
+            </>
+          )}
           <table>
             <tbody>
               {(Object.keys(result.expected_cost) as Action[]).map((action) => (

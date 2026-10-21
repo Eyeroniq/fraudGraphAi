@@ -150,6 +150,20 @@ td:last-child {
   font-variant-numeric: tabular-nums;
 }
 
+.subhead {
+  font-size: 15px;
+  margin: 16px 0 4px;
+}
+
+.reasons {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.reasons li {
+  margin: 2px 0;
+}
+
 .error {
   color: var(--block);
 }

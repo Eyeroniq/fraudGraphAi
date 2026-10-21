@@ -125,7 +125,11 @@ def test_score_returns_a_decision(client: TestClient) -> None:
     assert response.status_code == 200
     assert body["txn_id"] == "T9000001"
     assert body["decision"] in {"APPROVE", "REVIEW", "BLOCK"}
-    assert body["reasons"] == []
+    if body["decision"] == "APPROVE":
+        assert body["reasons"] == []
+    else:
+        assert body["reasons"]
+        assert body["explanation_stable"] in {True, False}
     assert body["latency_ms"] >= 0
     assert isinstance(body["prediction_set"], list)
     assert body["decision_reason"] in {
@@ -227,3 +231,25 @@ def test_uncertain_set_routes_to_review(bundle: Path, events: list[Event]) -> No
             assert decision.decision in {"REVIEW", "BLOCK"}
             seen += 1
     assert seen > 0
+
+
+def test_non_approved_decisions_carry_reasons(bundle: Path, events: list[Event]) -> None:
+    scorer = Scorer(bundle)
+    explained = 0
+    for ev in events[:6_000]:
+        decision = scorer.score(ev)
+        if decision.decision == "APPROVE":
+            assert decision.reasons == []
+            assert decision.explanation_stable is None
+        elif decision.decision_reason != "type_not_modelled":
+            assert 1 <= len(decision.reasons) <= 3
+            impacts = [r["impact"] for r in decision.reasons]
+            assert impacts == sorted(impacts, reverse=True)
+            if impacts[0] == 0.0:  # policy reason: no feature raised the risk
+                assert decision.reasons[0]["code"] == decision.decision_reason.upper()
+            else:
+                assert all(i > 0 for i in impacts)
+            assert all(r["text"] and "{" not in r["text"] for r in decision.reasons)
+            assert decision.explanation_stable is not None
+            explained += 1
+    assert explained > 0

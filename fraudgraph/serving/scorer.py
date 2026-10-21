@@ -21,6 +21,7 @@ from fraudgraph.decision import conformal
 from fraudgraph.decision.conformal import CLASSES
 from fraudgraph.decision.costs import ACTIONS, CostParams, expected_costs
 from fraudgraph.decision.policy import OnlinePolicy, PolicyConfig
+from fraudgraph.explain.reasons import ReasonCodes, contributions, gap_after_top_k
 from fraudgraph.features.engine import FeatureEngine
 from fraudgraph.features.matrix import row_to_vector
 from fraudgraph.features.spec import ENGINE_VERSION, Event, FeatureSpec
@@ -28,6 +29,15 @@ from fraudgraph.features.state import InMemoryStore, StateStore
 from fraudgraph.models.bundle import verify_bundle
 
 MODELLED_TYPES = frozenset({"TRANSFER", "CASH_OUT"})
+# Shown when a payment is not approved but no feature raised its risk (a policy decision).
+POLICY_REASONS = {
+    "model_uncertain": (
+        "The model is not confident either way, so a check costs less than a mistake"
+    ),
+    "conformal_fraud": "The payment looks like confirmed fraud patterns with high confidence",
+    "capacity_overflow": "The review team is at capacity today; the next cheapest action was used",
+    "expected_cost": "A check is cheaper than the expected loss for this amount",
+}
 
 
 class BundleMismatchError(RuntimeError):
@@ -44,6 +54,7 @@ class Decision:
     expected_cost: dict[str, float]
     prediction_set: list[str] | None = None  # conformal set; None without a conformal model
     reasons: list[dict[str, Any]] = field(default_factory=list)
+    explanation_stable: bool | None = None  # None when no reasons were computed
     latency_ms: float = 0.0
 
 
@@ -82,6 +93,16 @@ class Scorer:
             )
         )
         self.engine = FeatureEngine(self.spec, store or InMemoryStore(self.spec.horizon_steps))
+        codes_path = bundle_dir / "reason_codes.yaml"
+        self.reason_codes = (
+            ReasonCodes.load(codes_path, self.features) if codes_path.is_file() else None
+        )
+        explain_path = bundle_dir / "explain.json"
+        self.stability_gap = (
+            float(json.loads(explain_path.read_text(encoding="utf-8"))["stability_gap_threshold"])
+            if explain_path.is_file()
+            else 0.0
+        )
         missing = set(self.features) - set(self.engine.feature_names)
         if missing:
             raise BundleMismatchError(f"engine does not compute {sorted(missing)}")
@@ -107,13 +128,35 @@ class Scorer:
 
     def probability(self, event: Event) -> float:
         """Calibrated P(fraud) for a modelled event, without touching state."""
-        x = row_to_vector(self.engine.features(event), self.features, self.spec.horizon_steps)
+        return self._score(event)[0]
+
+    def _score(self, event: Event) -> tuple[float, np.ndarray, dict[str, float]]:
+        feats = self.engine.features(event)
+        x = row_to_vector(feats, self.features, self.spec.horizon_steps)
         raw = np.asarray(self.booster.predict(x))
-        return float(self.calibrator(raw)[0])
+        return float(self.calibrator(raw)[0]), x, feats
+
+    def explain(
+        self, x: np.ndarray, feats: dict[str, float], event: Event
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """Top reasons (grouped TreeSHAP) and whether the top-3 is stable."""
+        assert self.reason_codes is not None
+        grouped = self.reason_codes.grouped(contributions(self.booster, x)[0])
+        values: dict[str, Any] = {**feats, "amount": event.amount, "type": event.type}
+        reasons = [r.__dict__ for r in self.reason_codes.reasons(grouped[0], values)]
+        stable = bool(gap_after_top_k(grouped)[0] >= self.stability_gap)
+        return reasons, stable
 
     def _decide(self, event: Event) -> Decision:
-        p = self.probability(event)
+        p, x, feats = self._score(event)
         action, reason, sets = self.policy.decide(p, event.amount, event.step)
+        reasons: list[dict[str, Any]] = []
+        stable: bool | None = None
+        if action != 0 and self.reason_codes is not None:  # explain anything not approved
+            reasons, stable = self.explain(x, feats, event)
+            if not reasons:  # nothing raised the risk: say why the policy acted
+                text = POLICY_REASONS.get(reason, reason)
+                reasons = [{"code": reason.upper(), "text": text, "impact": 0.0}]
         prediction_set = (
             None if sets is None else [c for c, inside in zip(CLASSES, sets, strict=True) if inside]
         )
@@ -125,6 +168,8 @@ class Scorer:
             decision_reason=reason,
             expected_cost=self._cost_dict(np.array([p]), np.array([event.amount])),
             prediction_set=prediction_set,
+            reasons=reasons,
+            explanation_stable=stable,
         )
 
     def _cost_dict(self, p: np.ndarray, amount: np.ndarray) -> dict[str, float]:

@@ -89,9 +89,9 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | **4.1** | MAPIE split conformal (marginal + class-conditional) | ☑ 2026-10-21 · Mondrian LAC: fraud coverage 0.805 at α = 0.2 (target 0.80); marginal covers 27 % of fraud |
 | **4.2** | Three-way decision policy + review capacity | ☑ 2026-10-21 · + STEP_UP (J3); test cost 66.3 M with conformal + capacity vs 153.8 M global threshold |
 | **4.3** | Coverage over time + review-load analysis | ☑ 2026-10-21 · late period: fraud coverage holds (0.79–0.87), legit breaks ([conformal.md](docs/conformal.md)) |
-| **5.1** | SHAP TreeExplainer + grouped reason codes | ☐ |
-| **5.2** | Stability: seed, perturbation, background sensitivity | ☐ |
-| **5.3** | Quantus: robustness, faithfulness, randomisation | ☐ |
+| **5.1** | SHAP TreeExplainer + grouped reason codes | ☑ 2026-10-21 · `pred_contrib` = shap exactly; top-3 templated reasons in the API |
+| **5.2** | Stability: seed, perturbation, background sensitivity | ☑ 2026-10-21 · median top-3 Jaccard 1.0 (75 % ≥ 0.8); `explanation_stable` flag |
+| **5.3** | Quantus: robustness, faithfulness, randomisation | ☑ 2026-10-21 · faithfulness SHAP 0.64 vs permutation 0.34 vs random 0.01 ([explain_quality](docs/explain_quality.md)) |
 | **6.1** | Stream replayer with delayed labels | ☐ |
 | **6.2** | Drift scenario library (D0–D5) | ☐ |
 | **6.3** | river online models + prequential evaluation | ☐ |
@@ -128,6 +128,7 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | 2026-10-21 | A6 costs rescaled to PaySim amounts: `c_review` 5 → 2,000, `c_friction` 50 → 20,000 (the old values review 71–99 % of traffic). Champion = `lgbm` (hour allowed, ablation always reported). |
 | 2026-10-21 | Graph study: E1 (T+O+G1) wins by the pre-registered rule; GNN (E3) loses and the hybrid (E2) adds no robust gain beyond G1; E1 fails on injected mule rings (E4). Champion candidate for 7.5: E1 without G1-b (servable before `/v1/labels`). |
 | 2026-10-21 | Phase 4: champion is `lgbm_g1` (graph features, no G1-b); STEP_UP action added (Juspay J3); conformal defaults α = 0.2, uncertain → STEP_UP, 2,000 reviews/day; Juspay track J1–J4 added. |
+| 2026-10-21 | Phase 5: reason codes from LightGBM TreeSHAP, one DEST_HISTORY group (the first design gave duplicate near-tied reasons); faithfulness and model randomisation implemented directly, the other Quantus metrics used as is. |
 
 ---
 
@@ -673,6 +674,7 @@ Unit-test every branch, including the empty set.
 - Always compare against baselines: random attributions and permutation importance. SHAP must clearly beat random.
 - **Fallback** if the spike fails: implement Max-Sensitivity, faithfulness correlation and rank stability ourselves (~150 lines) and note it in the docs.
 - → `docs/explain_quality.md`. *Done when:* a table of SHAP vs random vs permutation on all metrics, with CIs.
+- *Built:* `explain/{reasons,stability,quality,report}.py`, `configs/reason_codes.yaml`, `fgx explain`. Quantus 0.6 works through a torch wrapper on standardised `(n, 1, F)` inputs for MonotonicityCorrelation, MaxSensitivity, LocalLipschitzEstimate and RandomLogit (Spearman similarity); faithfulness and model randomisation are our own (Quantus's faithfulness baselines are image-style). Destination groups were merged into one DEST_HISTORY reason after they produced duplicate, near-tied reasons. The bundle carries `reason_codes.yaml`, `explain.json` (stability threshold) and `shap_background.npy`; the API returns `reasons` and `explanation_stable`.
 
 ## Phase 6 — Streaming, online learning & drift
 

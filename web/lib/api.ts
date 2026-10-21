@@ -22,6 +22,7 @@ export interface ScoreResponse {
   decision_reason: string;
   expected_cost: Partial<Record<Action, number>>;
   prediction_set: SetLabel[] | null;
+  explanation_stable: boolean | null;
   reasons: { code: string; text: string; impact: number }[];
   latency_ms: number;
 }
