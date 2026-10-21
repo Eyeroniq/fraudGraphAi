@@ -68,7 +68,7 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | **0.2** | Data download with checksum + pandera schema | ☑ 2026-10-21 · hash pinned; 6,362,620 rows / 8,213 fraud pass the schema |
 | **0.3** | EDA + leakage audit (`docs/data_audit.md`) | ☑ 2026-10-21 · `amount == oldbalance_orig` alone AP 0.981; 5 plan changes applied |
 | **0.4** | Synthetic PaySim-schema fixture generator (for tests/CI) | ☑ 2026-10-21 · 20,052 rows, golden sha256 pinned; ring burst in-degree 12 vs ≤ 6 legit |
-| **0.5** | CI skeleton (lint + unit tests) | ☐ |
+| **0.5** | CI skeleton (lint + unit tests) | ◐ workflow written, passes locally; waiting for first push |
 | **1.1** | Time-based splits with label-delay embargo | ☐ |
 | **1.2** | Decision-time tabular features | ☐ |
 | **1.3** | Baselines: rule, logistic regression, LightGBM | ☐ |
@@ -488,7 +488,7 @@ The project `.gitignore` only lists project artifacts (`data/`, `reports/`, `art
 - Mirrors the audit: single-use origins, reused destinations, fraud uniform over the day, sparse late days for legit only, drain fraud mostly to never-seen destinations. Ring transfers do **not** drain the sender, so only graph features can find them. Fraud rate ~1 % (higher than PaySim's 0.13 %) so small-sample tests have enough positives. `fgx data synth` writes it.
 - *Done when:* fixture rebuilds byte-identically from its seed, and a test asserts the ring is present.
 
-**0.5 CI skeleton** — `.github/workflows/ci.yml`: ruff, mypy, pytest (unit) on the fixture; uv cache.
+**0.5 CI skeleton** — `.github/workflows/ci.yml`: `lint` job (ruff, format check, mypy, pre-commit file hygiene) on Ubuntu; `test` job (pytest + coverage report) on Ubuntu **and Windows**; `UV_LOCKED=1` so a stale `uv.lock` fails; uv cache.
 - *Done when:* green on the first PR.
 
 ## Phase 1 — Baseline, evaluation harness & cost
