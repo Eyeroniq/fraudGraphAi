@@ -15,8 +15,8 @@ paths:
 data:
   kaggle_dataset: ealaxi/paysim1
   csv_name: PS_20174392719_1491204439457_log.csv
-  # sha256 of the raw CSV. Leave null until the first download prints it, then pin it here.
-  raw_sha256: null
+  # sha256 of the raw CSV (Kaggle ealaxi/paysim1, 493,534,783 bytes), pinned 2026-10-21.
+  raw_sha256: 16910f90577b0d981bf8ff289714510bb89bc71bff7d3f220f024e287e4eea6b
 
 mlflow:
   tracking_uri: sqlite:///mlruns/mlflow.db
