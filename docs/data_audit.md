@@ -10,8 +10,8 @@ reproduces them exactly (the LightGBM probes run with `deterministic=True`).
    `amount == oldbalance_orig` holds for **97.8 % of fraud and 0.0 % of legit** transactions.
    That one flag alone scores **AP 0.981**. A model that may see `oldbalance_orig` learns this
    rule, and every later comparison (graph, GNN, explanations) becomes meaningless.
-   **Proposal: exclude `oldbalance_orig` from the primary feature set** and report the
-   sender-balance model only as an artifact reference (see [Decisions](#decisions-for-the-roadmap)).
+   **Decision: `oldbalance_orig` is excluded from the primary feature set**; the
+   sender-balance model is reported only as an artifact reference (see [Decisions](#decisions-for-the-roadmap)).
 2. **Without balances the problem is hard but learnable**: amount + type + hour gives
    AP 0.156 at 0.14 % prevalence (≈ 110× random). Adding one decision-time graph fact —
    *has this destination received money before?* — lifts it to 0.180 (test) and 0.426 → 0.543
@@ -153,7 +153,7 @@ model the answer.
 | `type` | allowed | known at authorisation. Model only TRANSFER + CASH_OUT; other types still update graph state. |
 | `amount` | allowed | known at authorisation. Mild artifacts (10M cap, zero amounts) noted, kept. |
 | `nameOrig` | derived-only | graph key for origin history; almost never repeats. |
-| `oldbalanceOrg` | **excluded (proposed)** | known at decision time in reality, but `amount == oldbalance_orig` is a 97.8 % / 0.0 % simulator artifact (AP 0.981 alone). Used only in a labelled artifact-reference run. |
+| `oldbalanceOrg` | **excluded** | known at decision time in reality, but `amount == oldbalance_orig` is a 97.8 % / 0.0 % simulator artifact (AP 0.981 alone). Used only in a labelled artifact-reference run. |
 | `newbalanceOrig` | excluded | post-transaction value; its inconsistency with `old − amount` is itself a 90 % / 0.5 % artifact. |
 | `nameDest` | derived-only | graph key: destination history, in-degree, novelty (G1-a). |
 | `oldbalanceDest` | excluded | the receiving bank's data (D2); artifact (49.6 % zero-zero for fraud). |
@@ -163,7 +163,7 @@ model the answer.
 
 ## Decisions for the roadmap
 
-These change the plan and need sign-off before Phase 1:
+Applied to ROADMAP.md on 2026-10-21:
 
 1. **D2:** move `oldbalance_orig` from allowed to excluded for the primary track. Derived
    features `amount / oldbalance_orig` and `drains_account` go with it. Extend E5 (artifact

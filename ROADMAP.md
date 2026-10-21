@@ -66,7 +66,7 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 |---|---|---|
 | **0.1** | Repo skeleton, tooling (uv, ruff, mypy, pre-commit, poe tasks) | ☑ 2026-10-21 · `poe check` green (10 tests, mypy strict) |
 | **0.2** | Data download with checksum + pandera schema | ☑ 2026-10-21 · hash pinned; 6,362,620 rows / 8,213 fraud pass the schema |
-| **0.3** | EDA + leakage audit (`docs/data_audit.md`) | ☑ 2026-10-21 · `amount == oldbalance_orig` alone AP 0.981; 5 plan changes proposed, awaiting sign-off |
+| **0.3** | EDA + leakage audit (`docs/data_audit.md`) | ☑ 2026-10-21 · `amount == oldbalance_orig` alone AP 0.981; 5 plan changes applied |
 | **0.4** | Synthetic PaySim-schema fixture generator (for tests/CI) | ☐ |
 | **0.5** | CI skeleton (lint + unit tests) | ☐ |
 | **1.1** | Time-based splits with label-delay embargo | ☐ |
@@ -124,6 +124,7 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 |---|---|
 | 2026-10-16 | Review pass before Phase 0: one job per split (`train_val`, `calib_a`, `calib_b`); step-bucketed state instead of per-step staging; 3.0 rule made exact (seed averaging, primary comparison, freeze); GNN hybrid needs out-of-fold, batch-refreshed embeddings; prior-shift check; D0 built from the stable period; LightGBM `pred_contrib` in serving; idempotent Redis writes; static-export routing; effort re-totalled. |
 | 2026-10-16 | Native Windows dev: Python 3.12 via uv, `pyproject.toml` + `uv.lock` instead of `requirements*.in`, poe tasks instead of `make`, `.gitattributes` forcing LF, pre-commit hook shim. |
+| 2026-10-21 | From the [data audit](docs/data_audit.md): D2 now excludes the sender balance too; model splits inside steps 1–408 with 409–743 as late-period test; G1-a (destination novelty) is the core graph family, O and G1-b expected weak, `cash_out_after_transfer` dropped; hour-of-day ablation required; B-rule = new destination. |
 
 ---
 
@@ -136,7 +137,7 @@ Short ADRs (architecture decision records). Change one only by editing it here w
 | # | Decision | Why |
 |---|---|---|
 | D1 | **PaySim is the primary dataset**, IEEE-CIS is a stretch port. | PaySim has real account→account edges (`nameOrig → nameDest`), an hourly clock (`step`, 744 hours) for time splits and stream replay, a licence that allows reuse, and it is easy to inject drift into. IEEE-CIS has no account IDs (they have to be built from `card1`/`addr1`/`D1` proxies) and its competition rules limit redistribution. |
-| D2 | **Only use what is known at decision time.** Destination balances and all `newbalance*` columns are excluded from the production feature set. | PaySim's balance columns are a known simulator artifact that gives a near-perfect score. A bank authorising a transfer does not know the receiving account's balance after the transfer. We still report a "with leaky balances" run, labelled as an artifact, to show the gap. |
+| D2 | **Only use what is known at decision time, and no balance column at all.** Destination balances, all `newbalance*` columns **and the sender's `oldbalance_orig`** are excluded from the primary feature set (so are `amount / oldbalance_orig` and `drains_account`). *(Revised 2026-10-21 after the 0.3 audit.)* | A bank does not know the receiving account's balances. The sender balance would be known, but in PaySim `amount == oldbalance_orig` holds for 97.8 % of fraud and 0.0 % of legit, so that one flag scores AP 0.981 ([data audit](docs/data_audit.md)) and would make every later comparison meaningless. E5 reports the balance runs, labelled as artifacts, to show the gap. |
 | D3 | **One feature engine for both training and serving.** The engine is a stateful `FeatureEngine.features(event)` → `apply(event)` loop. Offline backfill replays history through the same code the API uses. | Training/serving parity and no temporal leakage are guaranteed by construction. A parity test enforces this. |
 | D4 | **Score first, then update state.** Features for a transaction only use events from **strictly earlier steps**, plus labels older than the label delay `L`. Writes go straight into step-keyed buckets; reads skip every bucket with `step ≥ event.step`. | PaySim's `step` is one hour and the order inside an hour is unknown. Labels (chargebacks, analyst verdicts) arrive late in real life. Step-keyed buckets give the same rule offline and online without a "commit the step" event, so several API workers can write at once without races. |
 | D5 | **The champion must be servable at p95 < 50 ms on CPU.** GNN results are research results. A GNN only goes to production if it wins by the pre-registered rule **and** fits the latency budget. | Keeps the serving image small (no torch/PyG unless it earns its place). Honest about the engineering cost of graphs. |
@@ -268,10 +269,10 @@ class FeatureEngine:
 
 | Family | Examples |
 |---|---|
-| Transaction (T) | `log_amount`, `type` (one-hot), `hour_of_day = step % 24`, `amount / oldbalance_orig`, `drains_account = amount ≥ oldbalance_orig`, `dest_is_merchant` |
-| Origin history (O) | count/sum of outgoing txns in 1 h/24 h/7 d, time since last txn, `amount` z-score vs own history, first-time-seen flag |
-| Destination 1-hop (G1-a) | in-degree and distinct senders in 24 h/7 d, total received, received/sent ratio, account age (steps since first seen), `cash_out_after_transfer` pattern (only if 0.3 shows transfer destinations ever cash out — public PaySim analyses suggest they don't), burstiness |
-| 2-hop (G1-b) | for the destination's recent senders: mean of *their* out-degree, share of them that are new accounts; known-fraud contact: # neighbours with a confirmed fraud label older than `L` |
+| Transaction (T) | `log_amount`, `type` (one-hot), `hour_of_day = step % 24` (simulator-inflated: always ablate), `amount == 10M` cap flag. No balance-derived features (D2). |
+| Origin history (O) | count/sum of outgoing txns in 1 h/24 h/7 d, time since last txn, `amount` z-score vs own history, first-time-seen flag. **Expected weak:** only 0.15 % of origins repeat; kept for drift scenarios. |
+| Destination 1-hop (G1-a) — **core graph family** | `dest_is_new` (no earlier-step transactions in), earlier in-degree (all time / 24 h / 7 d), distinct senders, total received, account age (steps since first seen), burstiness. Never-seen destinations carry 1.23 % fraud vs 0.09–0.18 % otherwise. (`cash_out_after_transfer` dropped: 0 chains in PaySim.) |
+| 2-hop (G1-b) | for the destination's recent senders: mean of *their* out-degree, share of them that are new accounts; known-fraud contact: # neighbours with a confirmed fraud label older than `L`. **Expected weak / deprioritised:** only 1,769 accounts both send and receive, and only 44 destinations get more than one fraud. Mostly useful under D3. |
 | Pair (G1-c) | has orig→dest happened before, count of past orig→dest txns |
 | GNN (G2) | 32-d edge embedding from the PyG model (offline study, see Phase 3) |
 
@@ -337,7 +338,7 @@ Base path `/api`. OpenAPI is generated by FastAPI. TypeScript types are generate
   "expected_cost": {"APPROVE": 1830.2, "REVIEW": 188.0, "BLOCK": 29.4},
   "reasons": [
     {"code": "DEST_NEW_SENDERS_BURST", "text": "Receiving account got money from 14 new senders in the last 24 h", "impact": 1.21},
-    {"code": "DRAINS_ACCOUNT", "text": "Transfer empties the sender's balance", "impact": 0.87},
+    {"code": "DEST_NEVER_SEEN", "text": "Receiving account has never received money before", "impact": 0.87},
     {"code": "DEST_NEW_ACCOUNT", "text": "Receiving account first seen 3 hours ago", "impact": 0.44}
   ],
   "latency_ms": 18.7
@@ -494,7 +495,7 @@ The project `.gitignore` only lists project artifacts (`data/`, `reports/`, `art
 **Goal:** an honest, strong, non-graph baseline and a harness every later model is judged by.
 
 **1.1 Time-based splits** (`data/splits.py`)
-- Split by `step` into train / calib / test (start at ~70/15/15 by row count, then adjust with 0.3's volume plot).
+- Split by `step`, **inside the dense period steps 1–408 only** (0.3: legit volume collapses after step 408 while fraud stays flat, so fraud rate jumps 0.18 % → 2.3 %). Start at ~70/15/15 of the dense rows by row count.
 - **Each split has one job, so no data is used twice:**
 
   | Split | Used for |
@@ -507,7 +508,7 @@ The project `.gitignore` only lists project artifacts (`data/`, `reports/`, `art
   Re-using one calib set for early stopping, calibration *and* conformal makes the conformal scores
   depend on the data they are calibrated on, which weakens the coverage guarantee.
 - **Embargo:** drop the last `L` steps of each training window (their labels would not be known yet at training time).
-- Also define a **late-period test** (the sparse tail of PaySim) and report it separately as a natural shift.
+- Steps 409–743 are the **late-period test**, reported separately as a natural prevalence shift (never used for fitting, calibration or conformal).
 - Record prevalence per split in `splits.json`. Make sure the test window covers enough 24-step days for the block bootstrap (≥ 10 blocks); if not, use 6-step blocks and say so.
 - *Done when:* a test asserts `max(train.step) + L < min(calib_a.step)`, `calib_a` and `calib_b` do not overlap, and no `txn_id` is in two splits.
 
@@ -515,7 +516,8 @@ The project `.gitignore` only lists project artifacts (`data/`, `reports/`, `art
 - Model only on `TRANSFER` + `CASH_OUT` (the only types with fraud). Other types score as "low risk by rule" but **still update the state** (they are graph edges).
 
 **1.3 Baselines**
-- B-rule: `drains_account & type ∈ {TRANSFER, CASH_OUT}`.
+- B-rule: `dest_is_new & type ∈ {TRANSFER, CASH_OUT}` (destination never received money at an earlier step). Replaces the old `drains_account` rule, which is a D2 artifact.
+- **Hour ablation:** every baseline is also reported without `hour_of_day` (0.3: hour is inflated because legit traffic has a daily cycle and fraud does not).
 - B-lr: logistic regression (scaled, class-weighted).
 - **B-gbm:** LightGBM with `scale_pos_weight` vs. no weighting + later calibration (pick by `train_val` AP). Early stopping on `train_val`, Optuna (≤ 50 trials) on train-internal time folds. Calib and test are never used for model selection.
 
@@ -600,11 +602,12 @@ often the strongest way to use a GNN, but two traps must be handled:
 | E2 | T+O+G1+G2 | LightGBM |
 | E3 | edge features only | GNN end-to-end |
 | E4 | E1 on drift scenario D3 (mule ring) | LightGBM — *where graphs should matter* |
-| E5 | E0 with leaky balances | LightGBM — artifact reference only |
+| E5a | E0 + sender balance (`oldbalance_orig`, `drains_account`, `amount == oldbalance_orig`) | LightGBM — artifact reference only |
+| E5b | E0 + all balance columns | LightGBM — artifact reference only |
 
 For each run: AP, cost, recall@P0.8, CIs, p95 latency, feature-group SHAP importance. Ablation: drop each
 G1 sub-family. **Write the verdict first, in one sentence, then the evidence.** If the graph does not win
-on plain PaySim (quite possible given the origin-ID sparsity), say so and show E4 as the case where it does or doesn't.
+on plain PaySim (quite possible given the origin-ID sparsity), say so and show E4 as the case where it does or doesn't. Report E0–E2 with and without `hour_of_day`.
 
 ## Phase 4 — Uncertainty & decision policy
 
@@ -733,7 +736,7 @@ condition. Runs on the fixture in CI and on full data in the full-pipeline workf
 
 **9.2 Behaviour tests** (`tests/model/`)
 - *Invariance:* renaming account IDs (consistently, keeping the `C`/`M` prefix) does not change scores.
-- *Directional:* with everything else fixed, `drains_account=True` does not lower risk; a known-fraud neighbour does not lower risk.
+- *Directional:* with everything else fixed, a never-seen destination does not lower risk; a known-fraud neighbour does not lower risk.
 - *Minimum functionality:* planted fixture fraud patterns are flagged.
 - *Floors:* AP on fixture test ≥ recorded floor; new model AP ≥ champion − tolerance (no silent regressions).
 - *Conformal:* fixture class-conditional coverage within tolerance of `1−α`.
@@ -792,7 +795,7 @@ Rules: tests never touch the real dataset, every random thing is seeded, and a b
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| PaySim is "too easy" through the balance columns | Fake-looking results | D2: decision-time features only. The leaky run is shown only as an artifact (E5). |
+| PaySim is "too easy" through the balance columns | Fake-looking results | D2 (revised): no balance column in the primary features, sender balance included. Balance runs shown only as artifacts (E5a/E5b). |
 | Origin IDs almost never repeat → little graph signal | Graph may not win | Pre-registered rule (3.0), destination-side and 2-hop features, D3 scenario, honest verdict. A null result is a valid result. |
 | 6.3 M rows on a laptop | Slow iteration | polars, a 10 % time-contiguous dev sample, profile the engine early, cache feature parquet. |
 | PyG / torch install on Windows | Lost days | Use the CPU wheels for `torch` + `torch_geometric` only (SAGE/GINE need no compiled extras like `torch-scatter`). If that still fails, run the GNN study in a Docker container. Serving does not need torch (D5). |
