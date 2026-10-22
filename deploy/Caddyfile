@@ -3,8 +3,12 @@
 	encode gzip
 
 	# Same origin for page and API, so no CORS in production (D9).
+	# The page is the API's client: Caddy adds its key (FG_WEB_API_KEY, from .env) so
+	# the key never ships in the static bundle. The WebSocket gets it the same way.
 	handle_path /api/* {
-		reverse_proxy api:8000
+		reverse_proxy api:8000 {
+			header_up X-API-Key {$FG_WEB_API_KEY}
+		}
 	}
 
 	handle {

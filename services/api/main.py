@@ -1,31 +1,56 @@
-"""Scoring API (task 2.2): `POST /v1/score`, `GET /health`, `GET /ready`.
+"""FraudGraph API (A7): scoring, stored decisions, review cases, labels, monitoring.
 
 Run: `uv run uvicorn services.api.main:app` (bundle from `FG_BUNDLE_DIR`, or the newest
-bundle under `artifacts/bundles/`). State is in memory for now; Redis arrives in 7.1.
+bundle under `artifacts/bundles/`). Backends come from `FG_API__*` settings: Redis for
+feature state (else in process), Postgres for the decision log (else in-memory SQLite).
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import os
-import threading
-from collections import OrderedDict
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from fraudgraph.config import get_settings
-from fraudgraph.features.spec import Event
-from fraudgraph.features.state import OutOfOrderError
+from fraudgraph.config import ApiSettings, get_settings
+from fraudgraph.features.redis_store import RedisStore
+from fraudgraph.features.state import StateStore
 from fraudgraph.serving.scorer import Scorer
-from services.api.schemas import Health, Ready, ScoreRequest, ScoreResponse
+from services.api.db import DecisionLog, make_engine
+from services.api.deps import AppContext, make_limiter
+from services.api.routers import cases, labels, models, monitoring, score, sim, transactions
+from services.api.schemas import Health, Ready
+from services.api.security import KEY_HEADER, ApiError, ApiKeys, BodyLimit, install_redaction
+from services.api.ws import Broadcaster
 
-IDEMPOTENCY_CACHE = 100_000
-# Local web dev server (`npm run dev`). In compose the page is same-origin via Caddy (D9).
-DEFAULT_CORS_ORIGINS = "http://localhost:3000"
+log = logging.getLogger("fraudgraph.api")
+
+TAGS = [
+    {"name": "scoring", "description": "Score transactions (write scope)."},
+    {"name": "transactions", "description": "Stored decisions, explanations, ego-graphs."},
+    {"name": "cases", "description": "Review queue and analyst verdicts."},
+    {"name": "labels", "description": "Late labels: chargebacks and the replayer."},
+    {"name": "monitoring", "description": "Drift, alarms and live performance."},
+    {"name": "models", "description": "Model versions and the champion."},
+    {"name": "simulation", "description": "Replayer and drift injection (admin, demo)."},
+    {"name": "ops", "description": "Liveness and readiness."},
+]
+HTTP_CODES = {
+    400: "bad_request",
+    401: "unauthorized",
+    403: "forbidden",
+    404: "not_found",
+    405: "method_not_allowed",
+    413: "payload_too_large",
+}
 
 
 def latest_bundle(root: Path) -> Path | None:
@@ -48,31 +73,87 @@ def error(status: int, code: str, message: str) -> JSONResponse:
     return JSONResponse(status_code=status, content={"error": {"code": code, "message": message}})
 
 
-def create_app(bundle_dir: Path | None = None) -> FastAPI:
-    app = FastAPI(title="FraudGraph API", version="0.2.0")
-    origins = [
-        o.strip()
-        for o in os.environ.get("FG_CORS_ORIGINS", DEFAULT_CORS_ORIGINS).split(",")
-        if o.strip()
-    ]
-    if origins:  # explicit allow-list only, never "*"
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=origins,
-            allow_methods=["GET", "POST"],
-            allow_headers=["content-type"],
-        )
-    state: dict[str, object] = {"scorer": None, "detail": None}
-    lock = threading.Lock()  # in-memory state is not thread-safe; one writer at a time
-    seen: OrderedDict[str, ScoreResponse] = OrderedDict()
+def create_app(
+    bundle_dir: Path | None = None,
+    settings: ApiSettings | None = None,
+    *,
+    store: StateStore | None = None,
+) -> FastAPI:
+    """Build the app. `store` overrides the configured feature state (tests)."""
+    settings = settings or get_settings().api
+    install_redaction()
+    app = FastAPI(
+        title="FraudGraph API",
+        version="0.7.0",
+        openapi_tags=TAGS,
+        description=(
+            "Real-time fraud scoring with reasons and uncertainty. Authenticate with an "
+            f"`{KEY_HEADER}` header (scopes read < write < admin). Errors are always "
+            '`{"error": {"code", "message"}}`.'
+        ),
+    )
+    ctx = AppContext(
+        settings=settings,
+        keys=ApiKeys.parse(settings.api_keys, enabled=settings.auth_enabled),
+        log=DecisionLog(make_engine(settings.database_url)),
+        broadcaster=Broadcaster(),
+        reports_dir=get_settings().paths.reports_dir,
+    )
+    if not settings.auth_enabled:
+        log.warning("API authentication is disabled (FG_API__AUTH_ENABLED=false)")
+    app.state.ctx = ctx
 
     path = bundle_dir or resolve_bundle()
     try:
         if path is None:
             raise FileNotFoundError("no bundle found; set FG_BUNDLE_DIR or run `fgx bundle`")
-        state["scorer"] = Scorer(path)
+        if store is None and settings.redis_url:
+            spec = json.loads((path / "feature_spec.json").read_text(encoding="utf-8"))
+            ctx.redis = RedisStore.from_url(
+                settings.redis_url, spec["horizon_steps"], prefix=settings.redis_prefix
+            )
+        ctx.scorer = Scorer(path, store=store or ctx.redis)
     except Exception as exc:  # the service stays up and reports not ready
-        state["detail"] = f"{type(exc).__name__}: {exc}"
+        ctx.detail = f"{type(exc).__name__}: {exc}"
+    if ctx.scorer is not None:
+        try:
+            ctx.log.register_model(
+                ctx.scorer.version,
+                ctx.scorer.manifest.get("metrics", {}),
+                path.name if path else "",
+            )
+        except Exception as exc:  # e.g. migrations not applied yet; /ready says so
+            log.warning("could not register the model version: %s", type(exc).__name__)
+
+    _middleware(app, settings)
+    _handlers(app)
+    limiter = make_limiter(settings)
+    app.state.limiter = limiter
+    for module in (score, transactions, cases, labels, monitoring, models, sim):
+        app.include_router(module.build(limiter, ctx))
+    _ops_routes(app, ctx)
+    return app
+
+
+def _middleware(app: FastAPI, settings: ApiSettings) -> None:
+    origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+    if "*" in origins:
+        raise ValueError("FG_API__CORS_ORIGINS must list origins explicitly, not '*'")
+    if origins:  # explicit allow-list only
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_methods=["GET", "POST"],
+            allow_headers=["content-type", KEY_HEADER.lower()],
+            max_age=600,
+        )
+    app.add_middleware(BodyLimit, max_bytes=settings.max_body_bytes)
+
+
+def _handlers(app: FastAPI) -> None:
+    @app.exception_handler(ApiError)
+    async def _api_error(_: Request, exc: ApiError) -> JSONResponse:
+        return error(exc.status, exc.code, exc.message)
 
     @app.exception_handler(RequestValidationError)
     async def _validation(_: Request, exc: RequestValidationError) -> JSONResponse:
@@ -80,50 +161,66 @@ def create_app(bundle_dir: Path | None = None) -> FastAPI:
         where = ".".join(str(p) for p in first.get("loc", ()) if p != "body")
         return error(422, "invalid_request", f"{where}: {first.get('msg', 'invalid')}")
 
+    @app.exception_handler(StarletteHTTPException)
+    async def _http(_: Request, exc: StarletteHTTPException) -> JSONResponse:
+        code = HTTP_CODES.get(exc.status_code, "http_error")
+        return error(exc.status_code, code, str(exc.detail))
+
+    @app.exception_handler(RateLimitExceeded)
+    async def _rate(_: Request, exc: RateLimitExceeded) -> JSONResponse:
+        return error(429, "rate_limited", f"rate limit exceeded: {exc.detail}")
+
+
+def _ops_routes(app: FastAPI, ctx: AppContext) -> None:
     @app.get("/health", response_model=Health, tags=["ops"])
     def health() -> Health:
         return Health(status="ok")
 
-    @app.get("/ready", response_model=Ready, tags=["ops"])
+    @app.get("/ready", response_model=Ready, tags=["ops"], responses={503: {"model": Ready}})
     def ready() -> JSONResponse | Ready:
-        scorer = state["scorer"]
-        if isinstance(scorer, Scorer):
-            return Ready(status="ready", model_version=scorer.version)
-        body = Ready(status="not_ready", detail=str(state["detail"]))
+        """Ready once the bundle is loaded and Redis and the database answer."""
+        checks = {"model": ctx.scorer is not None}
+        detail = ctx.detail
+        for name, probe in (("redis", ctx.redis.ping if ctx.redis else None), ("db", ctx.log.ping)):
+            if probe is None:
+                continue
+            try:
+                checks[name] = bool(probe())
+            except Exception as exc:
+                checks[name] = False
+                detail = detail or f"{name}: {type(exc).__name__}"
+        if all(checks.values()) and ctx.scorer is not None:
+            return Ready(status="ready", model_version=ctx.scorer.version, checks=checks)
+        body = Ready(status="not_ready", detail=str(detail), checks=checks)
         return JSONResponse(status_code=503, content=body.model_dump())
 
-    @app.post(
-        "/v1/score",
-        response_model=ScoreResponse,
-        tags=["scoring"],
-        responses={409: {"description": "Out-of-order step"}, 503: {"description": "No model"}},
-    )
-    def score(request: ScoreRequest) -> JSONResponse | ScoreResponse:
-        scorer = state["scorer"]
-        if not isinstance(scorer, Scorer):
-            return error(503, "not_ready", str(state["detail"]))
-        with lock:
-            if request.txn_id in seen:  # idempotent: same answer, state not touched twice
-                return seen[request.txn_id]
-            event = Event(
-                txn_id=request.txn_id,
-                step=request.step,
-                type=request.type,
-                amount=request.amount,
-                name_orig=request.name_orig,
-                name_dest=request.name_dest,
-            )
-            try:
-                decision = scorer.score(event)
-            except OutOfOrderError as exc:
-                return error(409, "out_of_order", str(exc))
-            response = ScoreResponse(**decision.__dict__)
-            seen[request.txn_id] = response
-            if len(seen) > IDEMPOTENCY_CACHE:
-                seen.popitem(last=False)
-        return response
+    @app.websocket("/ws/live")
+    async def live(websocket: WebSocket) -> None:
+        """Every decision as it is made. Browsers cannot set headers on a WebSocket, so
+        the read key may also come as `?api_key=` (redacted from logs)."""
+        key = websocket.headers.get(KEY_HEADER) or websocket.query_params.get("api_key")
+        try:
+            ctx.keys.authenticate(key, "read")
+        except ApiError as exc:  # accept, then close: the client sees code and reason
+            await websocket.accept()
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=exc.code)
+            return
+        queue = ctx.broadcaster.subscribe()
+        await websocket.accept()
 
-    return app
+        async def pump() -> None:
+            while True:
+                await websocket.send_json(await queue.get())
+
+        sender = asyncio.create_task(pump())
+        try:
+            while True:  # only to notice the client leaving
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            pass
+        finally:
+            sender.cancel()
+            ctx.broadcaster.unsubscribe(queue)
 
 
 app = create_app()

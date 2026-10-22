@@ -1,6 +1,7 @@
 # FraudGraph scoring API. Build from the repository root:
 #   docker build -f docker/api.Dockerfile -t fraudgraph-api .
 # Bundles are not baked in: mount them at /app/artifacts (see deploy/docker-compose.yml).
+# The same image runs the schema migrations: `alembic upgrade head`.
 
 FROM python:3.12-slim AS builder
 COPY --from=ghcr.io/astral-sh/uv:0.13.1 /uv /bin/uv
@@ -13,6 +14,8 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY fraudgraph ./fraudgraph
 COPY services ./services
 COPY configs ./configs
+COPY migrations ./migrations
+COPY alembic.ini ./
 RUN uv sync --frozen --no-dev
 
 

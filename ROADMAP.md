@@ -98,13 +98,13 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | **6.4** | Own PSI/KS/χ² monitor + ADWIN performance monitor | ☑ 2026-10-22 · labels catch D1/D2/D3/D6 in 25–36 steps, quiet on D0/D4/D5; inputs see only D5 |
 | **6.5** | Evidently reports | ☑ 2026-10-22 · PSI per feature agrees with ours (Spearman 0.85, same features above 0.2); HTML + JSON per run |
 | **6.6** | Retraining policy experiment (static vs online vs triggered) | ☑ 2026-10-22 · daily sliding retrain lowest cost on all 7 scenarios ([drift_study](docs/drift_study.md)) |
-| **7.1** | Redis-backed feature state | ☐ |
-| **7.2** | Postgres decision log, review cases, labels (SQLAlchemy + Alembic) | ☐ |
-| **7.3** | Full API: batch, explain, cases, labels, monitoring, models, WebSocket | ☐ |
+| **7.1** | Redis-backed feature state | ☑ 2026-10-22 · one Lua call per event; parity with InMemoryStore on 1,200 fixture events + labels; a retry on another worker counts once |
+| **7.2** | Postgres decision log, review cases, labels (SQLAlchemy + Alembic) | ☑ 2026-10-22 · 8 A8 tables, migration `0001` equals the models; written after the response, insert-or-ignore on `txn_id` |
+| **7.3** | Full API: batch, explain, cases, labels, monitoring, models, WebSocket | ☑ 2026-10-22 · every A7 route but `/metrics` (7.6); promote and sim answer 501 until 7.4/7.5; scorer p95 10.5 ms on the fixture |
 | **7.4** | Worker: online learner, drift monitor, label simulator | ☐ |
 | **7.5** | Champion/challenger shadow scoring + promotion | ☐ |
 | **7.6** | Observability: structured logs, Prometheus metrics, latency budget | ☐ |
-| **7.7** | Security: API keys, rate limits, CORS, input limits | ☐ |
+| **7.7** | Security: API keys, rate limits, CORS, input limits | ☑ 2026-10-22 · read/write/admin keys stored as sha256, fail closed; slowapi 429, 413 over 1 MiB, no `*` CORS, keys redacted from logs |
 | **8.1** | Web app scaffold, design system, typed API client | ☐ |
 | **8.2** | Live Monitor page | ☐ |
 | **8.3** | Review Queue + Case view (SHAP, conformal set, ego-graph) | ☐ |
@@ -130,6 +130,7 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | 2026-10-21 | Phase 4: champion is `lgbm_g1` (graph features, no G1-b); STEP_UP action added (Juspay J3); conformal defaults α = 0.2, uncertain → STEP_UP, 2,000 reviews/day; Juspay track J1–J4 added. |
 | 2026-10-21 | Phase 5: reason codes from LightGBM TreeSHAP, one DEST_HISTORY group (the first design gave duplicate near-tied reasons); faithfulness and model randomisation implemented directly, the other Quantus metrics used as is. |
 | 2026-10-22 | Phase 6: daily sliding retrain is the policy for 7.4 (lowest cost on all of D0–D6); monitors alert, they do not trigger retrains. Drift monitors use day-long windows and a stream-start reference on the model matrix; D6 (UPI mule VPAs, J2) added. |
+| 2026-10-22 | Phase 7 (7.1–7.3, 7.7): `StateStore.apply` writes one event as a unit (Lua in Redis, with the `seen:` marker); `predictions` also stores `step` for the `(decision, step)` index; `POST /v1/labels` records a label at the later of its step and the newest scored step; `/v1/models/{v}/promote` and `/v1/sim/*` exist with admin auth but answer 501 until 7.5 / 7.4; Caddy injects the web page's key. |
 
 ---
 

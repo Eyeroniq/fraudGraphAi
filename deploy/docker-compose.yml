@@ -1,22 +1,70 @@
-# Walking skeleton (Phase 2): the API plus the web page behind Caddy.
+# Backend stack (Phase 7): API + Redis (feature state) + Postgres (decision log), and the
+# web page behind Caddy.
+#   cp deploy/.env.example deploy/.env    # then fill in the keys (`fgx api-key`)
 #   uv run poe up     # build and start, then open http://localhost:8080
 #   uv run poe down
 # The API loads the newest bundle under ../artifacts/bundles (run `fgx bundle`, or
 # `fgx all --fixture --out artifacts/bundles` for a synthetic one).
 name: fraudgraph
 
+x-api-env: &api-env
+  FG_API__DATABASE_URL: postgresql+psycopg://fraudgraph:${POSTGRES_PASSWORD:?set it in deploy/.env}@postgres:5432/fraudgraph
+  FG_API__REDIS_URL: redis://redis:6379/0
+  FG_API__API_KEYS: ${FG_API__API_KEYS:?set it in deploy/.env}
+  FG_API__CORS_ORIGINS: ""  # same origin through Caddy: no CORS needed (D9)
+
 services:
-  api:
+  redis:
+    image: redis:7.4-alpine
+    # Feature state is rebuilt by replaying the stream, so no persistence; a memory cap
+    # with LRU eviction keeps idle accounts from growing it without bound.
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "512mb", "--maxmemory-policy", "volatile-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: fraudgraph
+      POSTGRES_USER: fraudgraph
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set it in deploy/.env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fraudgraph -d fraudgraph"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    image: fraudgraph-api:dev
     build:
       context: ..
       dockerfile: docker/api.Dockerfile
+    command: ["alembic", "upgrade", "head"]
+    environment: *api-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
     image: fraudgraph-api:dev
+    build:
+      context: ..
+      dockerfile: docker/api.Dockerfile
     volumes:
       - ../artifacts:/app/artifacts:ro
-    environment:
-      FG_CORS_ORIGINS: ""  # same origin through Caddy: no CORS needed (D9)
+    environment: *api-env
     ports:
       - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=2)"]
       interval: 10s
@@ -29,8 +77,13 @@ services:
       context: ..
       dockerfile: docker/web.Dockerfile
     image: fraudgraph-web:dev
+    environment:
+      FG_WEB_API_KEY: ${FG_WEB_API_KEY:?set it in deploy/.env}
     ports:
       - "8080:8080"
     depends_on:
       api:
         condition: service_healthy
+
+volumes:
+  pgdata:

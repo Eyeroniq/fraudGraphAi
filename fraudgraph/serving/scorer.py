@@ -56,6 +56,19 @@ class Decision:
     reasons: list[dict[str, Any]] = field(default_factory=list)
     explanation_stable: bool | None = None  # None when no reasons were computed
     latency_ms: float = 0.0
+    # Engine output the model saw (NaN = no history); empty for unmodelled types.
+    features: dict[str, float] = field(default_factory=dict, repr=False)
+
+
+@dataclass(frozen=True)
+class Explanation:
+    """Full attribution of one stored decision (A7 `/explain`)."""
+
+    contributions: dict[str, float]  # per feature, log-odds
+    bias: float
+    groups: dict[str, float]  # per reason code
+    reasons: list[dict[str, Any]]
+    explanation_stable: bool
 
 
 def check_engine_compatible(bundle_version: str, code_version: str) -> None:
@@ -147,6 +160,22 @@ class Scorer:
         stable = bool(gap_after_top_k(grouped)[0] >= self.stability_gap)
         return reasons, stable
 
+    def explain_features(self, feats: dict[str, float], event: Event) -> Explanation:
+        """Attribution of a decision from its stored features (no state is read)."""
+        if self.reason_codes is None:
+            raise BundleMismatchError("bundle has no reason codes")
+        x = row_to_vector(feats, self.features, self.spec.horizon_steps)
+        shap, bias = contributions(self.booster, x)
+        grouped = self.reason_codes.grouped(shap)
+        reasons, stable = self.explain(x, feats, event)
+        return Explanation(
+            contributions={f: float(v) for f, v in zip(self.features, shap[0], strict=True)},
+            bias=float(bias[0]),
+            groups={c: float(v) for c, v in zip(self.reason_codes.codes, grouped[0], strict=True)},
+            reasons=reasons,
+            explanation_stable=stable,
+        )
+
     def _decide(self, event: Event) -> Decision:
         p, x, feats = self._score(event)
         action, reason, sets = self.policy.decide(p, event.amount, event.step)
@@ -170,6 +199,7 @@ class Scorer:
             prediction_set=prediction_set,
             reasons=reasons,
             explanation_stable=stable,
+            features=feats,
         )
 
     def _cost_dict(self, p: np.ndarray, amount: np.ndarray) -> dict[str, float]:

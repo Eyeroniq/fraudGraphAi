@@ -82,6 +82,30 @@ class PolicySettings(BaseModel):
     review_capacity_per_day: int | None = Field(default=2_000, ge=1)
 
 
+class ApiSettings(BaseModel):
+    """Serving backend (Phase 7). Secrets (keys, URLs with passwords) come from the
+    environment or `.env` only, e.g. `FG_API__API_KEYS`, never from the YAML file."""
+
+    # SQLAlchemy URL, e.g. postgresql+psycopg://user:pw@db/fraudgraph. None = in-memory
+    # SQLite (tests, local runs without Docker).
+    database_url: str | None = None
+    # redis://host:6379/0. None = in-process feature state (single worker only).
+    redis_url: str | None = None
+    redis_prefix: str = "fg:"
+    # Comma-separated `scope:sha256(key)` entries, scope in read|write|admin
+    # (`fgx api-key` prints one). Auth is on unless explicitly disabled for local dev.
+    api_keys: str = ""
+    auth_enabled: bool = True
+    # Explicit allow-list for the browser; "" disables CORS (same origin behind Caddy).
+    cors_origins: str = "http://localhost:3000"
+    max_body_bytes: int = Field(default=1_048_576, ge=1_024)
+    # slowapi rate limits per API key (or client address without one).
+    rate_limit_score: str = "1200/minute"
+    rate_limit_batch: str = "60/minute"
+    rate_limit_read: str = "600/minute"
+    rate_limit_admin: str = "30/minute"
+
+
 class MlflowSettings(BaseModel):
     tracking_uri: str = "sqlite:///mlruns/mlflow.db"
     experiment: str = "fraudgraph"
@@ -104,6 +128,7 @@ class Settings(BaseSettings):
     policy: PolicySettings = Field(default_factory=PolicySettings)
     champion: str = "lgbm"
     mlflow: MlflowSettings = Field(default_factory=MlflowSettings)
+    api: ApiSettings = Field(default_factory=ApiSettings)
 
     @classmethod
     def settings_customise_sources(

@@ -51,11 +51,17 @@ The first download prints the file's sha256. Pin it as `data.raw_sha256` in
 
 ```bash
 uv run fgx all --fixture --out artifacts/bundles   # a bundle from synthetic data (or `fgx bundle` after the real pipeline)
-uv run poe up                                      # API + web page; open http://localhost:8080
+cp deploy/.env.example deploy/.env                 # fill in keys from `uv run fgx api-key`
+uv run poe up                                      # API + Redis + Postgres + web page; open http://localhost:8080
 uv run poe down
 ```
 
-For UI work: `uv run uvicorn services.api.main:app` and, in `web/`,
+Every `/v1` route needs an `X-API-Key` header (scopes read < write < admin); only the
+keys' sha256 hashes are configured (`FG_API__API_KEYS`). The OpenAPI docs are at
+`http://localhost:8000/docs`.
+
+For UI work: `FG_API__AUTH_ENABLED=false uv run uvicorn services.api.main:app` (feature
+state in process, in-memory SQLite) and, in `web/`,
 `NEXT_PUBLIC_API_BASE=http://localhost:8000 npm run dev` (http://localhost:3000).
 
 ## Configuration
