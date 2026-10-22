@@ -53,7 +53,9 @@ fn score_sends_the_key_and_the_contract_fields() {
         .with_body(REVIEW)
         .create();
 
-    let response = Client::new(server.url(), "fg_test").score(&request()).unwrap();
+    let response = Client::new(server.url(), "fg_test")
+        .score(&request())
+        .unwrap();
     mock.assert();
     assert_eq!(response.decision, Decision::Review);
     assert!(response.uncertain());
@@ -71,7 +73,9 @@ fn api_errors_keep_their_code_and_message() {
         .with_body(r#"{"error": {"code": "out_of_order", "message": "step 3 < 30"}}"#)
         .create();
 
-    let error = Client::new(server.url(), "k").score(&request()).unwrap_err();
+    let error = Client::new(server.url(), "k")
+        .score(&request())
+        .unwrap_err();
     assert_eq!(
         error,
         Error::Api {
