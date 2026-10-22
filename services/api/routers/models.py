@@ -3,10 +3,12 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Path, Request
+from fastapi.responses import FileResponse
 from slowapi import Limiter
 
 from services.api.deps import AppContext, context, error_responses, limited, requires
 from services.api.schemas import CurrentModel, ModelOut, PromoteResponse
+from services.api.security import ApiError
 
 
 def build(limiter: Limiter, ctx: AppContext) -> APIRouter:
@@ -43,6 +45,24 @@ def build(limiter: Limiter, ctx: AppContext) -> APIRouter:
             features=manifest.get("features", []),
             metrics=manifest.get("metrics", {}),
         )
+
+    @router.get(
+        "/lab",
+        dependencies=[requires("read")],
+        response_class=FileResponse,
+        responses={
+            200: {"content": {"application/json": {}}},
+            **error_responses(401, 403, 404, 429),
+        },
+        summary="Precomputed report data for the console (curves, cost sample, studies)",
+    )
+    @limited(limiter, read)
+    def lab(request: Request) -> FileResponse:
+        """Written by `fgx console-report` to `reports/console/lab.json`."""
+        path = context(request).reports_dir / "console" / "lab.json"
+        if not path.is_file():
+            raise ApiError(404, "not_found", "no console report; run `fgx console-report`")
+        return FileResponse(path, media_type="application/json")
 
     @router.post(
         "/{version}/promote",

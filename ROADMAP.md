@@ -105,12 +105,12 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | **7.5** | Champion/challenger shadow scoring + promotion | ☑ 2026-10-22 · shadow scoring off the request path; promotion by realised cost, hot swap under the scoring lock; fixture D3: shadow cost 1.22 M → 0.11 M, promoted |
 | **7.6** | Observability: structured logs, Prometheus metrics, latency budget | ◐ 2026-10-22 · JSON logs, `/metrics`; p95 47.8 ms at 100 rps on 2 workers (laptop, SQLite); 200 rps not met locally, measured in CI on Postgres + Redis |
 | **7.7** | Security: API keys, rate limits, CORS, input limits | ☑ 2026-10-22 · read/write/admin keys stored as sha256, fail closed; slowapi 429, 413 over 1 MiB, no `*` CORS, keys redacted from logs |
-| **8.1** | Web app scaffold, design system, typed API client | ☐ |
-| **8.2** | Live Monitor page | ☐ |
-| **8.3** | Review Queue + Case view (SHAP, conformal set, ego-graph) | ☐ |
-| **8.4** | Model Lab (PR/cost curves, interactive cost sliders, graph verdict) | ☐ |
-| **8.5** | Drift & Stream page (scenario injector, PSI heatmap, alarms) | ☐ |
-| **8.6** | Explainability Quality + Model Card pages | ☐ |
+| **8.1** | Web app scaffold, design system, typed API client | ☑ 2026-10-22 · glass design system, types generated from OpenAPI (CI fails on drift), shared live WebSocket with backoff, in-app mock backend; ~2–5 kB per page |
+| **8.2** | Live Monitor page | ☑ 2026-10-22 · KPIs, decision mix, score histogram, live feed, alarm banner |
+| **8.3** | Review Queue + Case view (SHAP, conformal set, ego-graph) | ☑ 2026-10-22 · F / L / J / K keys, SHAP waterfall, 2-hop SVG ego-graph, expected cost per action |
+| **8.4** | Model Lab (PR/cost curves, interactive cost sliders, graph verdict) | ☑ 2026-10-22 · cost curve recomputed in the browser from the test sample (`fgx console-report`) |
+| **8.5** | Drift & Stream page (scenario injector, PSI heatmap, alarms) | ☑ 2026-10-22 · D0–D6 injector, live PSI heat map, alarms, champion vs challenger, Phase 6 study |
+| **8.6** | Explainability Quality + Model Card pages | ☑ 2026-10-22 · stability, quality vs baselines, model card with promotion; e2e + axe (WCAG AA) green on every page |
 | **9.1** | deepchecks suites as CI gates | ☐ |
 | **9.2** | Model behaviour tests (invariance, directional, floors) | ☐ |
 | **9.3** | Full CI: python, web, model-validation, docker smoke, e2e | ☐ |
@@ -132,6 +132,7 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | 2026-10-22 | Phase 6: daily sliding retrain is the policy for 7.4 (lowest cost on all of D0–D6); monitors alert, they do not trigger retrains. Drift monitors use day-long windows and a stream-start reference on the model matrix; D6 (UPI mule VPAs, J2) added. |
 | 2026-10-22 | Phase 7 (7.1–7.3, 7.7): `StateStore.apply` writes one event as a unit (Lua in Redis, with the `seen:` marker); `predictions` also stores `step` for the `(decision, step)` index; `POST /v1/labels` records a label at the later of its step and the newest scored step; `/v1/models/{v}/promote` and `/v1/sim/*` exist with admin auth but answer 501 until 7.5 / 7.4; Caddy injects the web page's key. |
 | 2026-10-22 | Phase 7 (7.4–7.6, J4): the worker runs the daily-retrain policy from 6.6 with shadow challengers promoted by realised cost; the river online learner is dropped. Replayer controlled through `/v1/sim/*` (`sim_control`, migration 0002), batch labels endpoint. 7.6 load target not met on the dev laptop (p95 < 50 ms holds to 100 rps on 2 workers); measured in CI on the real stack. Rust client + FRM hook (J4). |
+| 2026-10-22 | Phase 8: console in the portfolio's glass style; hand-written SVG charts and ego-graph instead of ECharts / Cytoscape (page weight), in-app mock backend instead of MSW, axe in Playwright as the accessibility gate. Report pages read `GET /v1/models/lab` (`fgx console-report`). |
 
 ---
 
@@ -763,6 +764,11 @@ Build against the OpenAPI contract. Use MSW (Mock Service Worker) mocks so UI wo
 - **8.6 Explanation Quality + Model Card**.
 - **Tests:** Vitest for hooks/formatters, Playwright e2e: *start sim → case appears → resolve → label count increments*.
 - *Done when:* Lighthouse ≥ 90 for accessibility, every page has loading/empty/error states, and the e2e test passes in CI.
+- *As built:* the look follows the owner's portfolio (graphite gradient, mint accent, frosted
+  glass, mono labels). Charts, the ego-graph and the components are hand-written (SVG +
+  Tailwind) instead of shadcn/ui, ECharts and Cytoscape, to keep each page at a few kB; the
+  mock backend is an in-app module (dropped from production builds) instead of MSW; the
+  accessibility gate is axe (WCAG 2 A/AA, no serious or critical findings) in the Playwright run.
 
 ## Phase 9 — Validation gates, CI/CD & deployment
 

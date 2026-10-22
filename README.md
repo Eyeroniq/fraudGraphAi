@@ -66,9 +66,39 @@ the stack with a drift scenario. Details, metrics and the load test:
 [docs/operations.md](docs/operations.md). A Rust client with a pre-authorisation
 fraud-risk hook for a payment switch is in [clients/rust](clients/rust).
 
-For UI work: `FG_API__AUTH_ENABLED=false uv run uvicorn services.api.main:app` (feature
-state in process, in-memory SQLite) and, in `web/`,
-`NEXT_PUBLIC_API_BASE=http://localhost:8000 npm run dev` (http://localhost:3000).
+## Web console
+
+The console (`web/`, Next.js static export behind Caddy) has seven pages:
+
+- **Live:** the decision stream, decision mix and score distribution.
+- **Queue:** held payments, most savings first.
+- **Case:** an analyst's view. Reasons, SHAP waterfall, money graph, and F / L to label.
+- **Lab:** PR curves and live cost sliders.
+- **Drift:** the replayer, scenario injection, PSI heat map, alarms and the retraining study.
+- **Explain:** explanation quality.
+- **Model:** the model card and promotion.
+
+```bash
+cd web && NEXT_PUBLIC_MOCK=1 npm run dev           # demo data in the browser, no API needed
+```
+
+Against a local API instead:
+
+1. Start it with `FG_API__AUTH_ENABLED=false uv run uvicorn services.api.main:app`. Feature state
+   stays in process and the decision log in in-memory SQLite.
+2. Run `uv run fgx console-report` once, for the Lab, Explain and drift-study panels.
+3. In `web/`, run `NEXT_PUBLIC_API_BASE=http://localhost:8000 npm run dev` and open
+   http://localhost:3000.
+
+The console's API types are generated from the OpenAPI schema:
+
+```bash
+uv run python scripts/export_openapi.py
+```
+
+Then run `npm run gen:api` in `web/`; CI fails if they drift. In `web/`, `npm test` runs the
+unit tests. `NEXT_PUBLIC_MOCK=1 npm run build && npm run e2e` runs the Playwright flow and the
+accessibility checks.
 
 ## Configuration
 

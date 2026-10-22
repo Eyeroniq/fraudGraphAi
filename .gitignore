@@ -32,3 +32,5 @@ web/*.tsbuildinfo
 # Rust client
 clients/rust/target/
 clients/rust/Cargo.lock
+web/test-results/
+web/playwright-report/

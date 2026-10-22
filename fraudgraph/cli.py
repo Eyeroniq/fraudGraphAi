@@ -830,6 +830,26 @@ def drift_study_cmd(
     typer.echo(f"{path}")
 
 
+@app.command("console-report")
+def console_report_cmd() -> None:
+    """Phase 8: condense eval, policy, explain and drift reports for the web console."""
+    from fraudgraph import console
+    from fraudgraph.data.prepare import PARQUET_NAME
+
+    settings = get_settings()
+    champion = settings.champion
+    report = console.build(
+        predictions=settings.paths.artifacts_dir / "baselines" / "predictions.parquet",
+        events=settings.paths.data_dir / "processed" / PARQUET_NAME,
+        calibrator=settings.paths.artifacts_dir / "policy" / champion / "calibrator.joblib",
+        reports=settings.paths.reports_dir,
+        champion=champion,
+        seed=settings.seed,
+    )
+    path = console.write(report, settings.paths.reports_dir / "console" / "lab.json")
+    typer.echo(f"{path} ({path.stat().st_size / 1e6:.1f} MB)")
+
+
 @app.command("split")
 def split() -> None:
     """Choose time-based splits with the label-delay embargo -> data/processed/splits.json."""
