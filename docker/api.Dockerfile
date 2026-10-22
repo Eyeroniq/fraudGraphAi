@@ -2,21 +2,24 @@
 #   docker build -f docker/api.Dockerfile -t fraudgraph-api .
 # Bundles are not baked in: mount them at /app/artifacts (see deploy/docker-compose.yml).
 # The same image runs the schema migrations: `alembic upgrade head`.
+# The worker image is the same build with `--build-arg EXTRAS="--extra worker"`
+# and the command `python -m services.worker.main`.
 
 FROM python:3.12-slim AS builder
 COPY --from=ghcr.io/astral-sh/uv:0.13.1 /uv /bin/uv
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
 WORKDIR /app
+ARG EXTRAS=""
 
 # Dependencies first (cached layer), core only: no research extra, no dev tools (D5).
 COPY pyproject.toml uv.lock README.md ./
-RUN uv sync --frozen --no-dev --no-install-project
+RUN uv sync --frozen --no-dev --no-install-project $EXTRAS
 COPY fraudgraph ./fraudgraph
 COPY services ./services
 COPY configs ./configs
 COPY migrations ./migrations
 COPY alembic.ini ./
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev $EXTRAS
 
 
 FROM python:3.12-slim AS runtime
@@ -29,7 +32,9 @@ WORKDIR /app
 COPY --from=builder --chown=app:app /app /app
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
-    FG_PATHS__ARTIFACTS_DIR=/app/artifacts
+    FG_PATHS__ARTIFACTS_DIR=/app/artifacts \
+    FG_PATHS__REPORTS_DIR=/app/reports \
+    FG_API__JSON_LOGS=true
 USER app
 EXPOSE 8000
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \

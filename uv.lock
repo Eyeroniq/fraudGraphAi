@@ -610,6 +610,7 @@ dependencies = [
     { name = "lightgbm" },
     { name = "pandera", extra = ["polars"] },
     { name = "polars" },
+    { name = "prometheus-client" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -618,6 +619,7 @@ dependencies = [
     { name = "scikit-learn" },
     { name = "slowapi" },
     { name = "sqlalchemy" },
+    { name = "structlog" },
     { name = "typer" },
     { name = "uvicorn" },
 ]
@@ -634,6 +636,9 @@ research = [
     { name = "torch", version = "2.14.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
     { name = "torch", version = "2.14.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'linux'" },
     { name = "torch-geometric" },
+]
+worker = [
+    { name = "river" },
 ]
 
 [package.dev-dependencies]
@@ -661,6 +666,7 @@ requires-dist = [
     { name = "mlflow-skinny", marker = "extra == 'research'", specifier = ">=2.17" },
     { name = "pandera", extras = ["polars"], specifier = ">=0.22" },
     { name = "polars", specifier = ">=1.20" },
+    { name = "prometheus-client", specifier = ">=0.21" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pydantic-settings", specifier = ">=2.6" },
@@ -668,17 +674,19 @@ requires-dist = [
     { name = "quantus", marker = "extra == 'research'", specifier = ">=0.5" },
     { name = "redis", specifier = ">=5.2" },
     { name = "river", marker = "extra == 'research'", specifier = ">=0.21" },
+    { name = "river", marker = "extra == 'worker'", specifier = ">=0.21" },
     { name = "scikit-learn", specifier = ">=1.5" },
     { name = "shap", marker = "extra == 'research'", specifier = ">=0.46" },
     { name = "slowapi", specifier = ">=0.1.9" },
     { name = "sqlalchemy", specifier = ">=2.0" },
+    { name = "structlog", specifier = ">=24.4" },
     { name = "torch", marker = "sys_platform == 'linux' and extra == 'research'", specifier = ">=2.4", index = "https://download.pytorch.org/whl/cpu" },
     { name = "torch", marker = "sys_platform != 'linux' and extra == 'research'", specifier = ">=2.4" },
     { name = "torch-geometric", marker = "extra == 'research'", specifier = ">=2.6" },
     { name = "typer", specifier = ">=0.12" },
     { name = "uvicorn", specifier = ">=0.32" },
 ]
-provides-extras = ["research"]
+provides-extras = ["worker", "research"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1699,6 +1707,15 @@ wheels = [
 ]
 
 [[package]]
+name = "prometheus-client"
+version = "0.26.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/52/73/f1334c29c2af4cd9dba6c7817e61b611bd0215e2eb5565c6064a4de18802/prometheus_client-0.26.0.tar.gz", hash = "sha256:04a91bcf94e2cf74a44a1a874d651a2e853ed354b6e822f3b7487751465d5c2b", size = 92910, upload-time = "2026-07-24T19:36:41.893Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/eb/a3/b69efbf4143b5b9859b977770bbbabcc2796b702fa69dc40271e45cd5a56/prometheus_client-0.26.0-py3-none-any.whl", hash = "sha256:fa93d06737aa02bacd05794768508bb97d2fbee28cb3bca04eaae92f0ca953d6", size = 64494, upload-time = "2026-07-24T19:36:40.854Z" },
+]
+
+[[package]]
 name = "propcache"
 version = "0.5.4"
 source = { registry = "https://pypi.org/simple" }
@@ -2377,6 +2394,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/41/c7/aeadca282baf51d7b9c135674bac79ded91f4db79c69c188575d22234342/statsmodels-0.15.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:c6f2bd48915cc9b3b95c3c7f6ac363b6f8aaa38172962ba5f7f6885f0dfe57f2", size = 12042643, upload-time = "2026-08-27T14:33:06.022Z" },
     { url = "https://files.pythonhosted.org/packages/9c/44/7d3eb3836b3c054280baca7ec91bd12858825de437c6319c1212c2531d94/statsmodels-0.15.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:733887a09ff878a2e29504eda684488b26bd134ba3539ac58d2136a58914c65a", size = 12079497, upload-time = "2026-08-27T14:33:47.147Z" },
     { url = "https://files.pythonhosted.org/packages/03/e3/d863228849da191d37c54bdd72634fbbcfadd12e910e29e4bdca1b952bb6/statsmodels-0.15.0-cp312-cp312-win_amd64.whl", hash = "sha256:ba89eb3ccb1c9c1e400d5081157305495b09350b3a65f2d66d3424ad1d3c4209", size = 11322106, upload-time = "2026-08-27T10:35:58.135Z" },
+]
+
+[[package]]
+name = "structlog"
+version = "26.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5e/89/b4a0bcfdf4f71a3dea31379f095929613d7e4528a0996bca6aa964cd0dca/structlog-26.1.0.tar.gz", hash = "sha256:f63a716cbd1b1291cf7661de7794b455acfa4c43c5bcf1630e6ad5ddc1adb3b7", size = 1459881, upload-time = "2026-06-06T07:33:39.348Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a9/18/489c97b834dfff9cf2fc2507cede4bcd4b11e67f84bc462acd1992496f86/structlog-26.1.0-py3-none-any.whl", hash = "sha256:e081a26d6c373e6d201eca24eede26d8ffab07f88f477822e679183428d3d91e", size = 73764, upload-time = "2026-06-06T07:33:38.046Z" },
 ]
 
 [[package]]

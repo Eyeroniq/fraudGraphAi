@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -79,8 +80,12 @@ def check_engine_compatible(bundle_version: str, code_version: str) -> None:
         raise BundleMismatchError(f"bundle engine {bundle_version} vs code engine {code_version}")
 
 
-class Scorer:
-    def __init__(self, bundle_dir: Path, store: StateStore | None = None) -> None:
+class BundleModel:
+    """A verified bundle that decides from engine features: the champion's model part, and
+    on its own a shadow challenger scored on the champion's features (7.5)."""
+
+    def __init__(self, bundle_dir: Path) -> None:
+        self.bundle_dir = bundle_dir
         self.manifest = verify_bundle(bundle_dir)
         spec_data = json.loads((bundle_dir / "feature_spec.json").read_text(encoding="utf-8"))
         check_engine_compatible(spec_data["engine_version"], ENGINE_VERSION)
@@ -105,7 +110,6 @@ class Scorer:
                 review_capacity_per_day=policy.get("review_capacity_per_day"),
             )
         )
-        self.engine = FeatureEngine(self.spec, store or InMemoryStore(self.spec.horizon_steps))
         codes_path = bundle_dir / "reason_codes.yaml"
         self.reason_codes = (
             ReasonCodes.load(codes_path, self.features) if codes_path.is_file() else None
@@ -116,17 +120,22 @@ class Scorer:
             if explain_path.is_file()
             else 0.0
         )
-        missing = set(self.features) - set(self.engine.feature_names)
+
+    def check_features(self, available: Sequence[str]) -> None:
+        missing = set(self.features) - set(available)
         if missing:
             raise BundleMismatchError(f"engine does not compute {sorted(missing)}")
 
-    def score(self, event: Event, *, apply: bool = True) -> Decision:
-        """Decide on `event`, then (by default) record it in state. Score first (D4)."""
-        started = time.perf_counter()
-        if event.type in MODELLED_TYPES:
-            decision = self._decide(event)
-        else:
-            decision = Decision(
+    def probability_from(self, feats: dict[str, float]) -> tuple[float, np.ndarray]:
+        x = row_to_vector(feats, self.features, self.spec.horizon_steps)
+        raw = np.asarray(self.booster.predict(x, num_threads=1))  # one row: no thread pool
+        return float(self.calibrator(raw)[0]), x
+
+    def decide(self, event: Event, feats: dict[str, float], *, explain: bool = True) -> Decision:
+        """Decision for `event` from features computed before it (no state is touched).
+        `explain=False` skips the reasons (shadow scoring only needs the decision)."""
+        if event.type not in MODELLED_TYPES:
+            return Decision(
                 txn_id=event.txn_id,
                 model_version=self.version,
                 p_fraud=0.0,
@@ -134,20 +143,7 @@ class Scorer:
                 decision_reason="type_not_modelled",
                 expected_cost=self._cost_dict(np.zeros(1), np.array([event.amount])),
             )
-        if apply:
-            self.engine.apply(event)
-        latency = (time.perf_counter() - started) * 1_000
-        return Decision(**{**decision.__dict__, "latency_ms": round(latency, 3)})
-
-    def probability(self, event: Event) -> float:
-        """Calibrated P(fraud) for a modelled event, without touching state."""
-        return self._score(event)[0]
-
-    def _score(self, event: Event) -> tuple[float, np.ndarray, dict[str, float]]:
-        feats = self.engine.features(event)
-        x = row_to_vector(feats, self.features, self.spec.horizon_steps)
-        raw = np.asarray(self.booster.predict(x))
-        return float(self.calibrator(raw)[0]), x, feats
+        return self._decide(event, feats, explain)
 
     def explain(
         self, x: np.ndarray, feats: dict[str, float], event: Event
@@ -176,12 +172,12 @@ class Scorer:
             explanation_stable=stable,
         )
 
-    def _decide(self, event: Event) -> Decision:
-        p, x, feats = self._score(event)
+    def _decide(self, event: Event, feats: dict[str, float], explain: bool = True) -> Decision:
+        p, x = self.probability_from(feats)
         action, reason, sets = self.policy.decide(p, event.amount, event.step)
         reasons: list[dict[str, Any]] = []
         stable: bool | None = None
-        if action != 0 and self.reason_codes is not None:  # explain anything not approved
+        if explain and action != 0 and self.reason_codes is not None:  # anything not approved
             reasons, stable = self.explain(x, feats, event)
             if not reasons:  # nothing raised the risk: say why the policy acted
                 text = POLICY_REASONS.get(reason, reason)
@@ -206,3 +202,26 @@ class Scorer:
         """Expected cost of every enabled action (disabled ones are left out, not inf)."""
         costs = expected_costs(p, amount, self.costs)[0]
         return {ACTIONS[a]: round(float(costs[a]), 4) for a in self.costs.enabled_actions()}
+
+
+class Scorer(BundleModel):
+    """Bundle + feature engine: score an event, then record it in state."""
+
+    def __init__(self, bundle_dir: Path, store: StateStore | None = None) -> None:
+        super().__init__(bundle_dir)
+        self.engine = FeatureEngine(self.spec, store or InMemoryStore(self.spec.horizon_steps))
+        self.check_features(self.engine.feature_names)
+
+    def score(self, event: Event, *, apply: bool = True) -> Decision:
+        """Decide on `event`, then (by default) record it in state. Score first (D4)."""
+        started = time.perf_counter()
+        feats = self.engine.features(event) if event.type in MODELLED_TYPES else {}
+        decision = self.decide(event, feats)
+        if apply:
+            self.engine.apply(event)
+        latency = (time.perf_counter() - started) * 1_000
+        return Decision(**{**decision.__dict__, "latency_ms": round(latency, 3)})
+
+    def probability(self, event: Event) -> float:
+        """Calibrated P(fraud) for a modelled event, without touching state."""
+        return self.probability_from(self.engine.features(event))[0]

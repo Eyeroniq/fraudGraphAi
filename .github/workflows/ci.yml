@@ -97,6 +97,24 @@ jobs:
       - run: npm run lint
       - run: npm run build
 
+  rust-client:
+    name: rust client (J4)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/rust
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: clients/rust
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+
   docker-smoke:
     name: docker smoke (api image, redis, postgres)
     runs-on: ubuntu-latest
@@ -130,13 +148,35 @@ jobs:
           echo "::add-mask::$key"
           echo "SMOKE_API_KEY=$key" >> "$GITHUB_ENV"
           echo "FG_API__API_KEYS=$(echo "$out" | sed -n 's/^entry: *//p')" >> "$GITHUB_ENV"
-      - name: migrate and start the api against redis and postgres
+      - name: migrate and start the api (2 workers) against redis and postgres
         env:
           FG_API__DATABASE_URL: postgresql+psycopg://fg:fg@localhost:5432/fg
           FG_API__REDIS_URL: redis://localhost:6379/0
+          FG_API__RATE_LIMIT_SCORE: 1000000/minute  # the load test below
         run: |
           docker run --rm --network host -e FG_API__DATABASE_URL fraudgraph-api:ci alembic upgrade head
-          docker run -d --name api --network host             -e FG_API__DATABASE_URL -e FG_API__REDIS_URL -e FG_API__API_KEYS             -v "$PWD/artifacts:/app/artifacts:ro" fraudgraph-api:ci
+          docker run -d --name api --network host -e FG_API__DATABASE_URL -e FG_API__REDIS_URL \
+            -e FG_API__API_KEYS -e FG_API__RATE_LIMIT_SCORE \
+            -v "$PWD/artifacts:/app/artifacts:ro" fraudgraph-api:ci \
+            uvicorn services.api.main:app --host 0.0.0.0 --port 8000 --workers 2
       - run: uv run python scripts/smoke_api.py http://localhost:8000
+      - name: metrics endpoint
+        run: curl -fsS http://localhost:8000/metrics | grep -q fraudgraph_decisions_total
+      - name: one worker tick against postgres (monitors, retrain, judge)
+        run: |
+          docker build -f docker/api.Dockerfile --build-arg EXTRAS="--extra worker" -t fraudgraph-worker:ci .
+          docker run --rm --network host \
+            -e FG_API__DATABASE_URL=postgresql+psycopg://fg:fg@localhost:5432/fg \
+            -v "$PWD/artifacts:/app/artifacts" fraudgraph-worker:ci \
+            python -m services.worker.main --once
+      # Reported, not gating: the target (p95 < 50 ms at 200 rps on 2 workers, 7.6) is for
+      # the deployment host; a shared CI runner also runs the load generator.
+      - name: load test (200 rps, 30 s)
+        continue-on-error: true
+        run: |
+          uv run python scripts/load_test.py --base http://localhost:8000 \
+            --key "$SMOKE_API_KEY" --rps 200 --seconds 30 --p95-ms 50 | tee load_test.json
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"; cat load_test.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
       - if: failure()
         run: docker logs api

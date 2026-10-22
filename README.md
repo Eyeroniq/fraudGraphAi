@@ -52,13 +52,19 @@ The first download prints the file's sha256. Pin it as `data.raw_sha256` in
 ```bash
 uv run fgx all --fixture --out artifacts/bundles   # a bundle from synthetic data (or `fgx bundle` after the real pipeline)
 cp deploy/.env.example deploy/.env                 # fill in keys from `uv run fgx api-key`
-uv run poe up                                      # API + Redis + Postgres + web page; open http://localhost:8080
+uv run poe up                                      # API + Redis + Postgres + worker + web page; open http://localhost:8080
 uv run poe down
 ```
 
 Every `/v1` route needs an `X-API-Key` header (scopes read < write < admin); only the
 keys' sha256 hashes are configured (`FG_API__API_KEYS`). The OpenAPI docs are at
 `http://localhost:8000/docs`.
+
+The worker monitors drift, retrains daily into a shadow challenger and promotes it when
+it costs less on labelled traffic; `POST /v1/sim/start` (admin) replays PaySim through
+the stack with a drift scenario. Details, metrics and the load test:
+[docs/operations.md](docs/operations.md). A Rust client with a pre-authorisation
+fraud-risk hook for a payment switch is in [clients/rust](clients/rust).
 
 For UI work: `FG_API__AUTH_ENABLED=false uv run uvicorn services.api.main:app` (feature
 state in process, in-memory SQLite) and, in `web/`,

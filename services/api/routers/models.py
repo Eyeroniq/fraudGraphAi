@@ -6,8 +6,7 @@ from fastapi import APIRouter, Path, Request
 from slowapi import Limiter
 
 from services.api.deps import AppContext, context, error_responses, limited, requires
-from services.api.schemas import CurrentModel, ModelOut
-from services.api.security import ApiError
+from services.api.schemas import CurrentModel, ModelOut, PromoteResponse
 
 
 def build(limiter: Limiter, ctx: AppContext) -> APIRouter:
@@ -47,13 +46,17 @@ def build(limiter: Limiter, ctx: AppContext) -> APIRouter:
 
     @router.post(
         "/{version}/promote",
+        response_model=PromoteResponse,
         dependencies=[requires("admin")],
-        responses=error_responses(401, 403, 429, 501),
-        summary="Promote a challenger to champion (task 7.5)",
+        responses=error_responses(401, 403, 404, 409, 429, 503),
+        summary="Promote a challenger to champion (hot swap, no downtime)",
     )
     @limited(limiter, ctx.settings.rate_limit_admin)
-    def promote(request: Request, version: Annotated[str, Path(max_length=128)]) -> None:
-        """Hot-swapping the bundle arrives with champion/challenger shadow scoring (7.5)."""
-        raise ApiError(501, "not_implemented", "model promotion arrives with task 7.5")
+    def promote(request: Request, version: Annotated[str, Path(max_length=128)]) -> PromoteResponse:
+        """Load and verify the version's bundle, then swap it in between two requests.
+        Feature state carries over; the previous champion is archived."""
+        ctx = context(request)
+        previous = ctx.require_scorer().version
+        return PromoteResponse(version=ctx.promote(version).version, previous=previous)
 
     return router

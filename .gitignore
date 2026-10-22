@@ -28,3 +28,7 @@ web/out/
 .env.*
 !.env.example
 web/*.tsbuildinfo
+
+# Rust client
+clients/rust/target/
+clients/rust/Cargo.lock

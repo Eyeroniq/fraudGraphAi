@@ -328,3 +328,53 @@ class CurrentModel(BaseModel):
     engine_version: str
     features: list[str]
     metrics: dict[str, Any]
+
+
+class LabelBatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    labels: list[LabelRequest] = Field(min_length=1, max_length=MAX_BATCH)
+
+
+class LabelBatchResponse(BaseModel):
+    created: int
+    already_labelled: int
+    unknown: list[str] = Field(description="txn_ids with no stored transaction (skipped).")
+    invalid: list[str] = Field(description="txn_ids labelled before their own step (skipped).")
+
+
+class PromoteResponse(BaseModel):
+    version: str
+    previous: str
+
+
+ScenarioId = Literal["D0", "D1", "D2", "D3", "D4", "D5", "D6"]
+
+
+class SimStart(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"examples": [{"first_step": 356, "last_step": 408, "scenario": "D0"}]},
+    )
+
+    first_step: int = Field(default=356, ge=1, le=744)
+    last_step: int = Field(default=408, ge=1, le=744)
+    steps_per_tick: int = Field(default=1, ge=1, le=24, description="Steps replayed per tick.")
+    scenario: ScenarioId = "D0"
+
+
+class SimScenario(BaseModel):
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"examples": [{"name": "D3"}]})
+
+    name: ScenarioId
+
+
+class SimStatus(BaseModel):
+    running: bool
+    scenario: ScenarioId
+    scenario_start: int = Field(description="Step from which the scenario's drift applies.")
+    first_step: int
+    last_step: int
+    next_step: int
+    steps_per_tick: int
+    updated_at: dt.datetime

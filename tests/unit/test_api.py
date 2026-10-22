@@ -338,6 +338,34 @@ def test_labels_are_idempotent_and_reach_the_feature_state(
     assert detail["features"]["g_dest_known_fraud_in"] == 1.0
 
 
+def test_label_batch_skips_unknown_and_early_labels_and_feeds_fraud(client: TestClient) -> None:
+    score(client, txn_id="B1", step=10, name_dest="C88")
+    score(client, txn_id="B2", step=11, name_orig="C6", name_dest="C99")
+    labels = [
+        {"txn_id": "B1", "observed_fraud": True, "step": 30},
+        {"txn_id": "B1", "observed_fraud": False, "step": 31},  # first label wins
+        {"txn_id": "B2", "observed_fraud": False, "step": 5},  # before its own step
+        {"txn_id": "nope", "observed_fraud": True, "step": 30},
+    ]
+    body = client.post("/v1/labels/batch", json={"labels": labels}).json()
+    assert body == {"created": 1, "already_labelled": 1, "unknown": ["nope"], "invalid": ["B2"]}
+    again = client.post("/v1/labels/batch", json={"labels": labels[:1]}).json()
+    assert (again["created"], again["already_labelled"]) == (0, 1)
+    score(client, txn_id="B3", step=32, name_orig="C7", name_dest="C88")
+    detail = client.get("/v1/transactions/B3").json()
+    assert detail["features"]["g_dest_known_fraud_in"] == 1.0
+
+
+def test_metrics_expose_latency_decisions_and_model(client: TestClient) -> None:
+    score(client, txn_id="M1")
+    text = client.get("/metrics").text
+    assert 'fraudgraph_request_seconds_count{method="POST",route="/v1/score",status="200"}' in text
+    assert "fraudgraph_decisions_total" in text
+    assert "fraudgraph_model_info{model_version=" in text
+    assert "fraudgraph_review_queue" in text
+    assert "/v1/transactions/M1" not in text  # route templates only, never IDs
+
+
 def test_performance_counts_labelled_decisions(client: TestClient) -> None:
     score(client, txn_id="P1", step=10, name_dest="C90")
     client.post("/v1/labels", json={"txn_id": "P1", "observed_fraud": True, "step": 34})
@@ -384,17 +412,39 @@ def test_models_list_the_served_champion(client: TestClient, bundle: Path) -> No
     assert "t_log_amount" in current["features"]
 
 
-def test_admin_routes_need_admin_and_are_pending(bundle: Path) -> None:
+def test_admin_routes_need_admin(bundle: Path) -> None:
     client = TestClient(create_app(bundle, api_settings()))
     for path, body in (
         ("/v1/models/v1/promote", None),
-        ("/v1/sim/start", None),
+        ("/v1/sim/start", {}),
         ("/v1/sim/stop", None),
         ("/v1/sim/scenario", {"name": "D3"}),
     ):
         assert client.post(path, json=body, headers=auth("write")).status_code == 403
-        pending = client.post(path, json=body, headers=auth("admin"))
-        assert (pending.status_code, pending.json()["error"]["code"]) == (501, "not_implemented")
+    unknown = client.post("/v1/models/v1/promote", headers=auth("admin"))
+    assert (unknown.status_code, unknown.json()["error"]["code"]) == (404, "unknown_model")
+
+
+def test_sim_controls_record_the_replayer_state(bundle: Path) -> None:
+    client = TestClient(create_app(bundle, api_settings()), headers=auth("admin"))
+    started = client.post("/v1/sim/start", json={"first_step": 100, "last_step": 140})
+    assert started.status_code == 200, started.text
+    assert started.json() | {"updated_at": None} == {
+        "running": True,
+        "scenario": "D0",
+        "scenario_start": 100,
+        "first_step": 100,
+        "last_step": 140,
+        "next_step": 100,
+        "steps_per_tick": 1,
+        "updated_at": None,
+    }
+    injected = client.post("/v1/sim/scenario", json={"name": "D6"}).json()
+    assert (injected["scenario"], injected["scenario_start"]) == ("D6", 100)
+    assert client.post("/v1/sim/scenario", json={"name": "D9"}).status_code == 422
+    assert client.post("/v1/sim/stop").json()["running"] is False
+    backwards = client.post("/v1/sim/start", json={"first_step": 140, "last_step": 100})
+    assert backwards.status_code == 422
 
 
 def test_ready_reports_each_backend(client: TestClient) -> None:

@@ -104,8 +104,11 @@ class ReasonCodes:
 
 def contributions(booster: lgb.Booster, x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """(per-feature SHAP [n, F], bias [n]) on the margin, via LightGBM's TreeSHAP."""
+    threads: dict[str, Any] = {"num_threads": 1} if len(x) == 1 else {}  # serving: one row
     raw = np.asarray(
-        booster.predict(x, pred_contrib=True, num_iteration=booster.best_iteration or None)
+        booster.predict(
+            x, pred_contrib=True, num_iteration=booster.best_iteration or None, **threads
+        )
     )
     return raw[:, :-1], raw[:, -1]
 

@@ -16,7 +16,8 @@ from pathlib import Path
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from prometheus_client import CONTENT_TYPE_LATEST
 from slowapi.errors import RateLimitExceeded
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -26,6 +27,7 @@ from fraudgraph.features.state import StateStore
 from fraudgraph.serving.scorer import Scorer
 from services.api.db import DecisionLog, make_engine
 from services.api.deps import AppContext, make_limiter
+from services.api.observability import LatencyMiddleware, configure_logging
 from services.api.routers import cases, labels, models, monitoring, score, sim, transactions
 from services.api.schemas import Health, Ready
 from services.api.security import KEY_HEADER, ApiError, ApiKeys, BodyLimit, install_redaction
@@ -62,11 +64,22 @@ def latest_bundle(root: Path) -> Path | None:
     return max(candidates)[1] if candidates else None
 
 
-def resolve_bundle() -> Path | None:
+def resolve_bundle(log: DecisionLog | None = None) -> Path | None:
+    """`FG_BUNDLE_DIR`, else the champion recorded in the decision log (a promotion
+    survives a restart; the worker's newer challenger bundles are not served), else the
+    newest bundle on disk."""
     configured = os.environ.get("FG_BUNDLE_DIR")
     if configured:
         return Path(configured)
-    return latest_bundle(get_settings().paths.artifacts_dir / "bundles")
+    root = get_settings().paths.artifacts_dir / "bundles"
+    if log is not None:
+        try:
+            champions = [m for m in log.models() if m.stage == "champion"]
+        except Exception:  # no schema yet: fall back to the newest bundle
+            champions = []
+        if champions and (root / champions[0].bundle_uri / "manifest.json").is_file():
+            return root / champions[0].bundle_uri
+    return latest_bundle(root)
 
 
 def error(status: int, code: str, message: str) -> JSONResponse:
@@ -81,6 +94,8 @@ def create_app(
 ) -> FastAPI:
     """Build the app. `store` overrides the configured feature state (tests)."""
     settings = settings or get_settings().api
+    if settings.json_logs:
+        configure_logging()
     install_redaction()
     app = FastAPI(
         title="FraudGraph API",
@@ -103,7 +118,8 @@ def create_app(
         log.warning("API authentication is disabled (FG_API__AUTH_ENABLED=false)")
     app.state.ctx = ctx
 
-    path = bundle_dir or resolve_bundle()
+    path = bundle_dir or resolve_bundle(ctx.log)
+    ctx.bundles_root = path.parent if path is not None else None
     try:
         if path is None:
             raise FileNotFoundError("no bundle found; set FG_BUNDLE_DIR or run `fgx bundle`")
@@ -124,8 +140,11 @@ def create_app(
             )
         except Exception as exc:  # e.g. migrations not applied yet; /ready says so
             log.warning("could not register the model version: %s", type(exc).__name__)
+        ctx.metrics.set_model(ctx.scorer.version)
+        ctx.refresh_challengers(force=True)
 
     _middleware(app, settings)
+    app.add_middleware(LatencyMiddleware, metrics=ctx.metrics)  # outermost: times everything
     _handlers(app)
     limiter = make_limiter(settings)
     app.state.limiter = limiter
@@ -193,6 +212,16 @@ def _ops_routes(app: FastAPI, ctx: AppContext) -> None:
             return Ready(status="ready", model_version=ctx.scorer.version, checks=checks)
         body = Ready(status="not_ready", detail=str(detail), checks=checks)
         return JSONResponse(status_code=503, content=body.model_dump())
+
+    @app.get("/metrics", include_in_schema=False)
+    def metrics() -> Response:
+        """Prometheus exposition. Not routed by Caddy: scraped on the internal network."""
+        try:
+            open_cases, alarms = ctx.log.open_cases(), ctx.log.alarm_counts()
+        except Exception:  # the counters still render with the database down
+            open_cases, alarms = 0, {}
+        body = ctx.metrics.render(open_cases, alarms)
+        return Response(body, media_type=CONTENT_TYPE_LATEST)
 
     @app.websocket("/ws/live")
     async def live(websocket: WebSocket) -> None:

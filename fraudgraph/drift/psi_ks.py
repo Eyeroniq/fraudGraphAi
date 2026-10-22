@@ -15,7 +15,10 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+import polars as pl
 from scipy.stats import chi2_contingency, ks_2samp
+
+from fraudgraph.models.bundle import reference_stats
 
 EPS = 1e-4
 
@@ -51,6 +54,21 @@ def benjamini_hochberg(pvalues: np.ndarray, q: float) -> np.ndarray:
     out = np.zeros(m, dtype=bool)
     out[order[:k]] = True
     return out
+
+
+def matrix_stats(x: np.ndarray, features: list[str]) -> dict[str, Any]:
+    """Reference bins on the *model matrix* (NaNs already filled), as the monitors see it."""
+    return reference_stats(pl.DataFrame({f: x[:, i] for i, f in enumerate(features)}), features)
+
+
+def reference_alert_rates(
+    scores: np.ndarray, step: np.ndarray, first: int, last: int, cut: float
+) -> list[float]:
+    """Alert rates over day-long windows sliding by 6 steps inside the reference period."""
+    return [
+        float(np.mean(scores[(step >= a) & (step < a + 24)] >= cut))
+        for a in range(first, last - 22, 6)
+    ]
 
 
 @dataclass

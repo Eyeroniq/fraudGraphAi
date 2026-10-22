@@ -28,16 +28,21 @@ import polars as pl
 
 from fraudgraph.decision.costs import CostParams, expected_cost_decisions, realised_costs
 from fraudgraph.drift.detectors import PerformanceMonitor
-from fraudgraph.drift.psi_ks import InputDriftMonitor, PredictionDriftMonitor
+from fraudgraph.drift.psi_ks import (
+    InputDriftMonitor,
+    PredictionDriftMonitor,
+    matrix_stats,
+    reference_alert_rates,
+)
 from fraudgraph.drift.scenarios import Scenario, apply
 from fraudgraph.features.backfill import MODELLED_TYPES, backfill
 from fraudgraph.features.matrix import frame_to_matrix
 from fraudgraph.features.spec import FeatureSpec
-from fraudgraph.models.bundle import reference_stats
 from fraudgraph.models.calibrate import fit_calibrator
 from fraudgraph.models.compare import Ranked
 from fraudgraph.online import river_models
 from fraudgraph.online.replay import LabelConfig, label_schedule
+from fraudgraph.online.retrain import fit_like
 
 POLICIES = ("static", "online", "sliding", "triggered", "shadow")
 
@@ -80,18 +85,6 @@ def _ap(y: np.ndarray, s: np.ndarray) -> float:
     return Ranked(y, s).metrics()["ap"] if y.sum() > 0 else float("nan")
 
 
-def _lgbm_params(booster: lgb.Booster) -> dict[str, Any]:
-    keep = (
-        "objective", "num_leaves", "min_data_in_leaf", "feature_fraction", "bagging_fraction",
-        "bagging_freq", "lambda_l2", "scale_pos_weight", "learning_rate",
-    )  # fmt: skip
-    return {k: v for k, v in booster.params.items() if k in keep} | {
-        "verbosity": -1,
-        "deterministic": True,
-        "force_row_wise": True,
-    }
-
-
 def retrain(
     x: np.ndarray,
     observed: np.ndarray,
@@ -104,28 +97,7 @@ def retrain(
 ) -> lgb.Booster:
     """LightGBM on labels known at `now`, from the last `retrain_window` steps."""
     known = (label_step <= now) & (step >= now - cfg.retrain_window)
-    keep = known & (observed | (rng.random(len(observed)) < cfg.legit_keep))
-    weight = np.where(observed[keep], 1.0, 1.0 / cfg.legit_keep)
-    data = lgb.Dataset(
-        x[keep], observed[keep].astype(int), weight=weight, feature_name=booster.feature_name()
-    )
-    params = _lgbm_params(booster) | {"seed": int(rng.integers(1 << 30))}
-    return lgb.train(params, data, num_boost_round=booster.current_iteration())
-
-
-def matrix_stats(x: np.ndarray, features: list[str]) -> dict[str, Any]:
-    """Reference bins on the *model matrix* (NaNs already filled), as the monitors see it."""
-    return reference_stats(pl.DataFrame({f: x[:, i] for i, f in enumerate(features)}), features)
-
-
-def _ref_rates(
-    scores: np.ndarray, step: np.ndarray, first: int, last: int, cut: float
-) -> list[float]:
-    """Alert rates over day-long windows sliding by 6 steps inside the reference period."""
-    return [
-        float(np.mean(scores[(step >= a) & (step < a + 24)] >= cut))
-        for a in range(first, last - 22, 6)
-    ]
+    return fit_like(booster, x, observed, known, legit_keep=cfg.legit_keep, rng=rng)
 
 
 def _windows(step: np.ndarray, cfg: StudyConfig) -> list[tuple[int, int]]:
@@ -196,7 +168,9 @@ def run_scenario(
     ref_scores = scores["static"][ref_mask]
     alert_cut = float(np.quantile(ref_scores, cfg.alert_quantile))
     windows = _windows(step, cfg)
-    ref_rates = _ref_rates(scores["static"], step, cfg.stream_first, ref_end - 1, alert_cut)
+    ref_rates = reference_alert_rates(
+        scores["static"], step, cfg.stream_first, ref_end - 1, alert_cut
+    )
     ref_rows = np.flatnonzero(ref_mask)
     sample_rows = np.random.default_rng(1).choice(
         ref_rows, min(50_000, len(ref_rows)), replace=False
@@ -494,7 +468,7 @@ def natural_late_period(
     s_ref = np.asarray(booster.predict(x_ref))
     s_late = np.asarray(booster.predict(x_late))
     cut = float(np.quantile(s_ref, 0.98))
-    rates = _ref_rates(s_ref, ref["step"].to_numpy(), ref_first, ref_last, cut)
+    rates = reference_alert_rates(s_ref, ref["step"].to_numpy(), ref_first, ref_last, cut)
     inp = InputDriftMonitor(
         matrix_stats(x_ref, features),
         {f: x_ref[:, i] for i, f in enumerate(features)},

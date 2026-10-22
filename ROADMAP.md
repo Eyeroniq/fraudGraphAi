@@ -101,9 +101,9 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | **7.1** | Redis-backed feature state | ☑ 2026-10-22 · one Lua call per event; parity with InMemoryStore on 1,200 fixture events + labels; a retry on another worker counts once |
 | **7.2** | Postgres decision log, review cases, labels (SQLAlchemy + Alembic) | ☑ 2026-10-22 · 8 A8 tables, migration `0001` equals the models; written after the response, insert-or-ignore on `txn_id` |
 | **7.3** | Full API: batch, explain, cases, labels, monitoring, models, WebSocket | ☑ 2026-10-22 · every A7 route but `/metrics` (7.6); promote and sim answer 501 until 7.4/7.5; scorer p95 10.5 ms on the fixture |
-| **7.4** | Worker: online learner, drift monitor, label simulator | ☐ |
-| **7.5** | Champion/challenger shadow scoring + promotion | ☐ |
-| **7.6** | Observability: structured logs, Prometheus metrics, latency budget | ☐ |
+| **7.4** | Worker: online learner, drift monitor, label simulator | ☑ 2026-10-22 · replayer + D0–D6 via `/v1/sim`, day-window drift and label monitors, daily retrain to a hashed challenger; river learner dropped (6.6) ([operations](docs/operations.md)) |
+| **7.5** | Champion/challenger shadow scoring + promotion | ☑ 2026-10-22 · shadow scoring off the request path; promotion by realised cost, hot swap under the scoring lock; fixture D3: shadow cost 1.22 M → 0.11 M, promoted |
+| **7.6** | Observability: structured logs, Prometheus metrics, latency budget | ◐ 2026-10-22 · JSON logs, `/metrics`; p95 47.8 ms at 100 rps on 2 workers (laptop, SQLite); 200 rps not met locally, measured in CI on Postgres + Redis |
 | **7.7** | Security: API keys, rate limits, CORS, input limits | ☑ 2026-10-22 · read/write/admin keys stored as sha256, fail closed; slowapi 429, 413 over 1 MiB, no `*` CORS, keys redacted from logs |
 | **8.1** | Web app scaffold, design system, typed API client | ☐ |
 | **8.2** | Live Monitor page | ☐ |
@@ -131,6 +131,7 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | 2026-10-21 | Phase 5: reason codes from LightGBM TreeSHAP, one DEST_HISTORY group (the first design gave duplicate near-tied reasons); faithfulness and model randomisation implemented directly, the other Quantus metrics used as is. |
 | 2026-10-22 | Phase 6: daily sliding retrain is the policy for 7.4 (lowest cost on all of D0–D6); monitors alert, they do not trigger retrains. Drift monitors use day-long windows and a stream-start reference on the model matrix; D6 (UPI mule VPAs, J2) added. |
 | 2026-10-22 | Phase 7 (7.1–7.3, 7.7): `StateStore.apply` writes one event as a unit (Lua in Redis, with the `seen:` marker); `predictions` also stores `step` for the `(decision, step)` index; `POST /v1/labels` records a label at the later of its step and the newest scored step; `/v1/models/{v}/promote` and `/v1/sim/*` exist with admin auth but answer 501 until 7.5 / 7.4; Caddy injects the web page's key. |
+| 2026-10-22 | Phase 7 (7.4–7.6, J4): the worker runs the daily-retrain policy from 6.6 with shadow challengers promoted by realised cost; the river online learner is dropped. Replayer controlled through `/v1/sim/*` (`sim_control`, migration 0002), batch labels endpoint. 7.6 load target not met on the dev laptop (p95 < 50 ms holds to 100 rps on 2 workers); measured in CI on the real stack. Rust client + FRM hook (J4). |
 
 ---
 
@@ -743,6 +744,12 @@ Report: detection delay, false alarms, rolling AP/cost, time-to-recover, compute
 - **7.7 Security** — API keys (read / write / admin scopes, hashed in env), slowapi rate limits, strict CORS, request size limits, no PII in logs beyond account IDs, secrets only via `.env`.
 - *Done when:* `docker compose up` brings up the full stack, the replayer drives traffic, cases appear,
   resolving a case creates a label, the worker raises an alarm under D3, and every test is green.
+- *As built (7.4–7.6):* the worker runs the 6.6 policy (daily retrain to a shadow challenger,
+  promoted by realised cost) instead of a river online learner, which had the highest cost in
+  every scenario. The replayer lives in the worker and is driven through `/v1/sim/*` (table
+  `sim_control`); labels arrive in batches (`POST /v1/labels/batch`). The load-test target is
+  measured in CI against Postgres + Redis; on the Windows laptop with the SQLite fallback
+  the budget holds to 100 rps on 2 workers ([operations](docs/operations.md)).
 
 ## Phase 8 — Frontend: Fraud Console
 
@@ -804,7 +811,7 @@ lands in the phase where it belongs.
 | **J1** | Framing: a pre-authorisation risk hook for a payment switch; latency first; costs read as ₹ | README, docs | ☑ 2026-10-21 |
 | **J2** | UPI-style scenario: VPA-like accounts, P2P / P2M / collect-request flows, mule VPAs receiving many small transfers then cashing out — check whether the destination features catch them | 6.2 (scenario D6) | ☑ 2026-10-22 · static catches 16 % of mule payments in its top 1 %, daily retrain 65 % |
 | **J3** | `STEP_UP` action (OTP / 3DS challenge) between APPROVE and REVIEW | 4.2 | ☑ 2026-10-21 · EC rule 71.3 M → 59.8 M |
-| **J4** | Rust client for `/v1/score` + a demo of calling it from a Hyperswitch-style fraud-risk (FRM) hook | 7.3 | ☐ |
+| **J4** | Rust client for `/v1/score` + a demo of calling it from a Hyperswitch-style fraud-risk (FRM) hook | 7.3 | ☑ 2026-10-22 · `clients/rust`: typed client + pre-auth FRM hook (continue / challenge / review / cancel, explicit fail mode), tested in CI |
 
 ## Stretch goals
 

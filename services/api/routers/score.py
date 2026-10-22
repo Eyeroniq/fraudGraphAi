@@ -1,5 +1,6 @@
 """`POST /v1/score` and `POST /v1/score/batch`."""
 
+import structlog
 from fastapi import APIRouter, BackgroundTasks, Request
 from slowapi import Limiter
 
@@ -17,13 +18,15 @@ from services.api.schemas import (
 )
 from services.api.security import ApiError
 
+decisions_log = structlog.stdlib.get_logger("fraudgraph.api")
+
 
 def score_one(ctx: AppContext, request: ScoreRequest) -> tuple[ScoreResponse, Scored | None]:
     """Score and record one transaction. A repeated txn_id gets the first answer back and
     is not written again (the Redis marker also stops a retry on another worker from
     counting twice)."""
-    scorer = ctx.require_scorer()
     with ctx.lock:
+        scorer = ctx.require_scorer()  # read under the lock: a promotion swaps it
         cached = ctx.seen.get(request.txn_id)
         if cached is not None:
             return cached, None
@@ -42,6 +45,15 @@ def score_one(ctx: AppContext, request: ScoreRequest) -> tuple[ScoreResponse, Sc
         fields = {k: v for k, v in decision.__dict__.items() if k != "features"}
         response = ScoreResponse(**fields)
         ctx.remember(response)
+    ctx.metrics.decisions.labels(decision=response.decision).inc()
+    decisions_log.info(
+        "decision",
+        txn_id=response.txn_id,
+        model_version=response.model_version,
+        decision=response.decision,
+        decision_reason=response.decision_reason,
+        latency_ms=response.latency_ms,
+    )
     txn = request.model_dump(exclude_none=True)
     ctx.broadcaster.publish(
         {

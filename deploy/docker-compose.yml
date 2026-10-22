@@ -1,10 +1,13 @@
-# Backend stack (Phase 7): API + Redis (feature state) + Postgres (decision log), and the
-# web page behind Caddy.
+# Backend stack (Phase 7): API + Redis (feature state) + Postgres (decision log), the
+# worker (monitors, daily retrain, demo replayer) and the web page behind Caddy.
 #   cp deploy/.env.example deploy/.env    # then fill in the keys (`fgx api-key`)
 #   uv run poe up     # build and start, then open http://localhost:8080
 #   uv run poe down
 # The API loads the newest bundle under ../artifacts/bundles (run `fgx bundle`, or
-# `fgx all --fixture --out artifacts/bundles` for a synthetic one).
+# `fgx all --fixture --out artifacts/bundles` for a synthetic one). The worker writes
+# challenger bundles next to it and Evidently-free drift windows into Postgres; start
+# the replayer with POST /api/v1/sim/start (admin key). Metrics: http://api:8000/metrics
+# on the internal network only (Caddy does not route it).
 name: fraudgraph
 
 x-api-env: &api-env
@@ -12,6 +15,8 @@ x-api-env: &api-env
   FG_API__REDIS_URL: redis://redis:6379/0
   FG_API__API_KEYS: ${FG_API__API_KEYS:?set it in deploy/.env}
   FG_API__CORS_ORIGINS: ""  # same origin through Caddy: no CORS needed (D9)
+  # The demo replayer posts 1,000-event batches; external clients keep the default.
+  FG_API__RATE_LIMIT_BATCH: "600/minute"
 
 services:
   redis:
@@ -57,6 +62,7 @@ services:
       dockerfile: docker/api.Dockerfile
     volumes:
       - ../artifacts:/app/artifacts:ro
+      - ../reports:/app/reports:ro
     environment: *api-env
     ports:
       - "8000:8000"
@@ -71,6 +77,28 @@ services:
       timeout: 3s
       retries: 6
       start_period: 20s
+
+  worker:
+    image: fraudgraph-worker:dev
+    build:
+      context: ..
+      dockerfile: docker/api.Dockerfile
+      args:
+        EXTRAS: "--extra worker"
+    command: ["python", "-m", "services.worker.main"]
+    volumes:
+      - ../artifacts:/app/artifacts  # writes challenger bundles
+      - ../reports:/app/reports
+      - ../data/processed:/app/data/processed:ro  # events for the demo replayer
+    environment:
+      <<: *api-env
+      FG_WORKER__API_URL: http://api:8000
+      FG_WORKER__WRITE_KEY: ${FG_WORKER__WRITE_KEY:?set it in deploy/.env}
+      FG_WORKER__ADMIN_KEY: ${FG_WORKER__ADMIN_KEY:?set it in deploy/.env}
+      FG_WORKER__EVENTS_PATH: /app/data/processed/paysim.parquet
+    depends_on:
+      api:
+        condition: service_healthy
 
   web:
     build:

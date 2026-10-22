@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import datetime as dt
 import math
-from collections.abc import Sequence
+import threading
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, ClassVar, Literal, cast
 
@@ -144,6 +146,22 @@ class Alarm(Base):
     details: Mapped[dict[str, Any]]
 
 
+class SimControl(Base):
+    """One row: what the worker's replayer should do (written by `/v1/sim/*`)."""
+
+    __tablename__ = "sim_control"
+
+    sim_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    running: Mapped[bool] = mapped_column(Boolean)
+    scenario: Mapped[str] = mapped_column(String(8))
+    scenario_start: Mapped[int] = mapped_column(Integer)  # drift starts here (6.2)
+    first_step: Mapped[int] = mapped_column(Integer)
+    last_step: Mapped[int] = mapped_column(Integer)
+    next_step: Mapped[int] = mapped_column(Integer)
+    steps_per_tick: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class ModelVersion(Base):
     __tablename__ = "model_versions"
 
@@ -176,13 +194,20 @@ def _insert(session: Session, model: type[Base], rows: list[dict[str, Any]]) -> 
     Rows are counted from RETURNING, not `rowcount`: on Postgres a multi-row insert can
     run in SQLAlchemy's "insertmanyvalues" mode, where `rowcount` is not reliable.
     """
+    return len(_insert_keys(session, model, rows))
+
+
+def _insert_keys(session: Session, model: type[Base], rows: list[dict[str, Any]]) -> list[Any]:
+    """Like `_insert`, returning the primary keys of the rows actually written."""
     if not rows:
-        return 0
+        return []
     dialect = session.get_bind().dialect.name
     insert = postgresql.insert if dialect == "postgresql" else sqlite.insert
     table = cast(Table, model.__table__)
-    stmt = insert(table).values(rows).on_conflict_do_nothing().returning(*table.primary_key.columns)
-    return len(session.execute(stmt).all())
+    # Rows as parameters of one cached statement ("insertmanyvalues"), not a fresh
+    # multi-row VALUES clause compiled per call.
+    stmt = insert(table).on_conflict_do_nothing().returning(*table.primary_key.columns)
+    return list(session.execute(stmt, rows).all())
 
 
 def _json_safe(features: dict[str, float]) -> dict[str, float | None]:
@@ -197,6 +222,7 @@ class Scored:
     txn: dict[str, Any]  # Transaction columns
     decision: Decision
     features: dict[str, float]
+    shadow: tuple[Decision, ...] = ()  # challengers' decisions on the same features (7.5)
 
 
 @dataclass(frozen=True)
@@ -205,10 +231,32 @@ class Page:
     total: int
 
 
+class SerialSessions:
+    """Sessions that never overlap. The in-memory SQLite fallback is one connection shared
+    by every thread (StaticPool); concurrent background writes would corrupt it."""
+
+    def __init__(self, maker: sessionmaker[Session]) -> None:
+        self.maker = maker
+        self.lock = threading.RLock()
+
+    @contextmanager
+    def __call__(self) -> Iterator[Session]:
+        with self.lock, self.maker() as session:
+            yield session
+
+    @contextmanager
+    def begin(self) -> Iterator[Session]:
+        with self.lock, self.maker.begin() as session:
+            yield session
+
+
 class DecisionLog:
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
-        self.sessions = sessionmaker(engine, expire_on_commit=False)
+        maker = sessionmaker(engine, expire_on_commit=False)
+        self.sessions: sessionmaker[Session] | SerialSessions = (
+            SerialSessions(maker) if engine.dialect.name == "sqlite" else maker
+        )
 
     def ping(self) -> bool:
         with self.engine.connect() as conn:
@@ -220,9 +268,19 @@ class DecisionLog:
     def record(self, scored: Sequence[Scored]) -> None:
         """Store transactions, champion predictions and review cases (idempotent)."""
         txns, preds, cases = [], [], []
+        shadow: list[dict[str, Any]] = []
         for s in scored:
             d = s.decision
             txns.append(s.txn)
+            shadow.extend(
+                {
+                    "txn_id": c.txn_id,
+                    "model_version": c.model_version,
+                    "p_fraud": c.p_fraud,
+                    "decision": c.decision,
+                }
+                for c in s.shadow
+            )
             sets = d.prediction_set
             preds.append(
                 {
@@ -247,12 +305,39 @@ class DecisionLog:
             _insert(session, Transaction, txns)
             _insert(session, Prediction, preds)
             _insert(session, ReviewCase, cases)
+            _insert(session, ShadowPrediction, shadow)
 
     def add_label(self, txn_id: str, is_fraud: bool, source: str, step: int) -> bool:
         """Store a label; False if the transaction already had one (first label wins)."""
         row = {"txn_id": txn_id, "is_fraud": is_fraud, "source": source, "labelled_at_step": step}
         with self.sessions.begin() as session:
             return _insert(session, Label, [row]) == 1
+
+    def add_labels(
+        self, items: Sequence[tuple[str, bool, str, int]]
+    ) -> tuple[dict[str, Transaction], set[str]]:
+        """Bulk `add_label` for (txn_id, is_fraud, source, step): one lookup and one insert.
+        Returns the known transactions and the txn_ids whose label is new. Items for
+        unknown transactions, or with a step before the transaction's, are not written."""
+        ids = list({i[0] for i in items})
+        with self.sessions.begin() as session:
+            txns = {
+                t.txn_id: t
+                for t in session.scalars(select(Transaction).where(Transaction.txn_id.in_(ids)))
+            }
+            rows: dict[str, dict[str, Any]] = {}
+            for txn_id, is_fraud, source, step in items:
+                txn = txns.get(txn_id)
+                if txn is None or step < txn.step or txn_id in rows:
+                    continue
+                rows[txn_id] = {
+                    "txn_id": txn_id,
+                    "is_fraud": is_fraud,
+                    "source": source,
+                    "labelled_at_step": step,
+                }
+            created = {key[0] for key in _insert_keys(session, Label, list(rows.values()))}
+        return txns, created
 
     def resolve_case(
         self, case_id: int, verdict: str, assignee: str | None, notes: str | None
@@ -291,7 +376,138 @@ class DecisionLog:
             elif current.stage != "champion":
                 current.stage, current.promoted_at = "champion", utcnow()
 
+    def register_challenger(self, version: str, metrics: dict[str, Any], bundle_uri: str) -> bool:
+        """Add a model version in the challenger stage; False if the version is known."""
+        row = {
+            "version": version,
+            "stage": "challenger",
+            "metrics": metrics,
+            "bundle_uri": bundle_uri,
+        }
+        with self.sessions.begin() as session:
+            return _insert(session, ModelVersion, [row]) == 1
+
+    def retire(self, version: str) -> None:
+        """Archive a challenger that lost its shadow comparison."""
+        with self.sessions.begin() as session:
+            row = session.get(ModelVersion, version)
+            if row is not None and row.stage == "challenger":
+                row.stage = "archived"
+
+    def add_drift(self, windows: list[dict[str, Any]], alarms: list[dict[str, Any]]) -> None:
+        with self.sessions.begin() as session:
+            session.add_all([DriftWindow(**w) for w in windows])
+            session.add_all([Alarm(**a) for a in alarms])
+
+    def sim(self) -> SimControl | None:
+        with self.sessions() as session:
+            return session.get(SimControl, 1)
+
+    def set_sim(self, **fields: Any) -> SimControl:
+        """Create or update the single simulation-control row."""
+        with self.sessions.begin() as session:
+            row = session.get(SimControl, 1)
+            if row is None:
+                defaults: dict[str, Any] = {
+                    "running": False,
+                    "scenario": "D0",
+                    "scenario_start": 1,
+                    "first_step": 1,
+                    "last_step": 1,
+                    "next_step": 1,
+                    "steps_per_tick": 1,
+                }
+                row = SimControl(sim_id=1, **(defaults | fields))
+                session.add(row)
+            else:
+                for key, value in fields.items():
+                    setattr(row, key, value)
+            row.updated_at = utcnow()
+            return row
+
     # ---------------------------------------------------------------- reads
+
+    def challengers(self) -> list[ModelVersion]:
+        with self.sessions() as session:
+            return list(
+                session.scalars(select(ModelVersion).where(ModelVersion.stage == "challenger"))
+            )
+
+    def scored(self, first_step: int, last_step: int) -> list[tuple[int, dict[str, Any], float]]:
+        """(step, features, p_fraud) of modelled champion decisions in the steps."""
+        with self.sessions() as session:
+            rows = session.execute(
+                select(Prediction.step, Prediction.features, Prediction.p_fraud)
+                .where(Prediction.step.between(first_step, last_step))
+                .where(Prediction.decision_reason != "type_not_modelled")
+                .order_by(Prediction.step, Prediction.txn_id)
+            ).all()
+        return [(int(s), dict(f), float(p)) for s, f, p in rows]
+
+    def labelled(
+        self, first_step: int, last_step: int, known_by: int
+    ) -> list[tuple[int, dict[str, Any], float, bool]]:
+        """(step, features, amount, is_fraud) of modelled transactions in the steps whose
+        label was known by `known_by` (what a retrain at that step may use)."""
+        with self.sessions() as session:
+            rows = session.execute(
+                select(Prediction.step, Prediction.features, Transaction.amount, Label.is_fraud)
+                .join(Label, Label.txn_id == Prediction.txn_id)
+                .join(Transaction, Transaction.txn_id == Prediction.txn_id)
+                .where(Prediction.step.between(first_step, last_step))
+                .where(Label.labelled_at_step <= known_by)
+                .where(Prediction.decision_reason != "type_not_modelled")
+                .order_by(Prediction.step, Prediction.txn_id)
+            ).all()
+        return [(int(s), dict(f), float(a), bool(y)) for s, f, a, y in rows]
+
+    def fraud_labels(self, after_step: int, upto_step: int) -> list[tuple[int, str]]:
+        """(labelled_at_step, champion decision) of fraud labels that became known in
+        (after_step, upto_step]: the miss stream of the performance monitor."""
+        with self.sessions() as session:
+            rows = session.execute(
+                select(Label.labelled_at_step, Prediction.decision)
+                .join(Prediction, Prediction.txn_id == Label.txn_id)
+                .where(Label.is_fraud, Label.labelled_at_step > after_step)
+                .where(Label.labelled_at_step <= upto_step)
+                .where(Prediction.decision_reason != "type_not_modelled")
+                .order_by(Label.labelled_at_step, Label.txn_id)
+            ).all()
+        return [(int(s), str(d)) for s, d in rows]
+
+    def shadow_pairs(self, version: str, since_step: int) -> list[tuple[float, bool, str, str]]:
+        """(amount, is_fraud, champion decision, challenger decision) on labelled
+        transactions both models scored since `since_step`."""
+        query = (
+            select(
+                Transaction.amount, Label.is_fraud, Prediction.decision, ShadowPrediction.decision
+            )
+            .join(Label, Label.txn_id == Transaction.txn_id)
+            .join(Prediction, Prediction.txn_id == Transaction.txn_id)
+            .join(ShadowPrediction, ShadowPrediction.txn_id == Transaction.txn_id)
+            .where(ShadowPrediction.model_version == version, Transaction.step >= since_step)
+        )
+        with self.sessions() as session:
+            rows = session.execute(query).all()
+        return [(float(a), bool(y), str(c), str(s)) for a, y, c, s in rows]
+
+    def open_cases(self) -> int:
+        with self.sessions() as session:
+            query = select(func.count()).where(ReviewCase.status != "resolved")
+            return int(session.scalar(query) or 0)
+
+    def alarm_counts(self) -> dict[str, int]:
+        with self.sessions() as session:
+            rows = session.execute(select(Alarm.kind, func.count()).group_by(Alarm.kind)).all()
+        return {str(kind): int(n) for kind, n in rows}
+
+    def last_drift_end(self) -> int | None:
+        with self.sessions() as session:
+            return session.scalar(select(func.max(DriftWindow.end_step)))
+
+    def first_step(self) -> int | None:
+        with self.sessions() as session:
+            return session.scalar(select(func.min(Prediction.step)))
 
     def transaction(self, txn_id: str) -> tuple[Transaction, Prediction | None, Label | None]:
         with self.sessions() as session:

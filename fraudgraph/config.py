@@ -104,6 +104,41 @@ class ApiSettings(BaseModel):
     rate_limit_batch: str = "60/minute"
     rate_limit_read: str = "600/minute"
     rate_limit_admin: str = "30/minute"
+    # Challenger bundles (stage `challenger` in model_versions) are picked up this often.
+    challenger_refresh_s: float = Field(default=30.0, ge=0)
+    json_logs: bool = False  # one JSON object per log line (on in the Docker image)
+
+
+class WorkerSettings(BaseModel):
+    """Background worker (7.4). Keys come from the environment only."""
+
+    api_url: str = "http://localhost:8000"
+    write_key: str = ""  # the replayer posts scores and labels
+    admin_key: str = ""  # promotion of a challenger that wins in shadow
+    tick_seconds: float = Field(default=2.0, gt=0)
+    # Monitors (6.4): day-long windows against the stream's first two days; thresholds
+    # tuned on D0 in docs/drift_study.md.
+    window_steps: int = Field(default=24, ge=1)
+    reference_steps: int = Field(default=48, ge=1)
+    input_psi: float = 0.32
+    score_psi: float = 0.2
+    alert_z: float = 4.0
+    ph_threshold: float = 30.0
+    adwin_delta: float = 0.002
+    evidently: bool = True  # an Evidently report per window when the package is installed
+    # Retraining (6.6): daily, on the last week of known labels.
+    retrain_every: int = Field(default=24, ge=1)
+    retrain_window: int = Field(default=168, ge=1)
+    calib_steps: int = Field(default=24, ge=1)  # newest labelled steps held out to calibrate
+    legit_keep: float = Field(default=0.2, gt=0, le=1)
+    min_fraud_labels: int = Field(default=30, ge=1)
+    # Promotion (7.5): a challenger replaces the champion when its realised cost on
+    # labelled shadow traffic is lower, over at least `min_shadow_labels` labels.
+    auto_promote: bool = True
+    min_shadow_labels: int = Field(default=500, ge=1)
+    # Demo replayer (`/v1/sim/*`): events to stream and the label delay.
+    events_path: Path | None = None
+    label_delay_steps: int = Field(default=24, ge=1)
 
 
 class MlflowSettings(BaseModel):
@@ -129,6 +164,7 @@ class Settings(BaseSettings):
     champion: str = "lgbm"
     mlflow: MlflowSettings = Field(default_factory=MlflowSettings)
     api: ApiSettings = Field(default_factory=ApiSettings)
+    worker: WorkerSettings = Field(default_factory=WorkerSettings)
 
     @classmethod
     def settings_customise_sources(

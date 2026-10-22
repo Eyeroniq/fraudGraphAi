@@ -5,7 +5,13 @@ from slowapi import Limiter
 
 from services.api.db import Transaction
 from services.api.deps import AppContext, context, error_responses, limited, requires
-from services.api.schemas import LabelOut, LabelRequest, LabelResponse
+from services.api.schemas import (
+    LabelBatchRequest,
+    LabelBatchResponse,
+    LabelOut,
+    LabelRequest,
+    LabelResponse,
+)
 from services.api.security import ApiError
 
 
@@ -21,14 +27,22 @@ def record_label(
     if step < txn.step:
         raise ApiError(422, "invalid_request", f"step {step} is before the transaction's step")
     created = ctx.log.add_label(txn.txn_id, is_fraud, source, step)
-    if created and is_fraud and ctx.scorer is not None:
-        with ctx.lock:
-            engine = ctx.scorer.engine
-            known_at = max(step, engine.store.latest_step or step)
-            engine.apply_label(txn.name_dest, True, known_at, txn_id=txn.txn_id)
+    if created and is_fraud:
+        feed_fraud(ctx, [(txn, step)])
     _, _, label = ctx.log.transaction(txn.txn_id)
     assert label is not None
     return LabelOut.model_validate(label, from_attributes=True), created
+
+
+def feed_fraud(ctx: AppContext, labelled: list[tuple[Transaction, int]]) -> None:
+    """New fraud labels -> feature state (known-fraud features of the destination)."""
+    if ctx.scorer is None or not labelled:
+        return
+    with ctx.lock:
+        engine = ctx.scorer.engine
+        for txn, step in labelled:
+            known_at = max(step, engine.store.latest_step or step)
+            engine.apply_label(txn.name_dest, True, known_at, txn_id=txn.txn_id)
 
 
 def build(limiter: Limiter, ctx: AppContext) -> APIRouter:
@@ -58,5 +72,39 @@ def build(limiter: Limiter, ctx: AppContext) -> APIRouter:
         if not created:
             response.status_code = 200
         return LabelResponse(label=label, created=created)
+
+    @router.post(
+        "/labels/batch",
+        response_model=LabelBatchResponse,
+        dependencies=[requires("write")],
+        responses=error_responses(401, 403, 413, 422, 429),
+        summary="Post up to 1,000 late labels",
+    )
+    @limited(limiter, ctx.settings.rate_limit_batch)
+    def post_labels(request: Request, body: LabelBatchRequest) -> LabelBatchResponse:
+        """Each label is handled as by `POST /v1/labels` (first label wins, confirmed
+        fraud feeds the feature state), in one database round trip. Unknown transactions
+        and labels dated before their transaction are listed and skipped."""
+        ctx = context(request)
+        items = [(i.txn_id, i.observed_fraud, i.source, i.step) for i in body.labels]
+        txns, created = ctx.log.add_labels(items)
+        unknown = [i.txn_id for i in body.labels if i.txn_id not in txns]
+        invalid = [
+            i.txn_id for i in body.labels if i.txn_id in txns and i.step < txns[i.txn_id].step
+        ]
+        feed_fraud(
+            ctx,
+            [
+                (txns[i.txn_id], i.step)
+                for i in body.labels
+                if i.observed_fraud and i.txn_id in created
+            ],
+        )
+        return LabelBatchResponse(
+            created=len(created),
+            already_labelled=len(body.labels) - len(created) - len(unknown) - len(invalid),
+            unknown=unknown,
+            invalid=invalid,
+        )
 
     return router
