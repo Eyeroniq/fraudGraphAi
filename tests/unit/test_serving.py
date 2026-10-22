@@ -15,6 +15,7 @@ from fraudgraph.features.spec import Event
 from fraudgraph.pipeline import fixture_bundle
 from fraudgraph.serving.scorer import BundleMismatchError, Scorer
 from services.api.main import create_app, latest_bundle
+from tests.api_helpers import api_settings, auth
 
 
 @pytest.fixture(scope="module")
@@ -108,7 +109,7 @@ def payload(**overrides: object) -> dict[str, object]:
 
 @pytest.fixture
 def client(bundle: Path) -> TestClient:
-    return TestClient(create_app(bundle))
+    return TestClient(create_app(bundle, api_settings()), headers=auth("write"))
 
 
 def test_health_and_ready(client: TestClient, bundle: Path) -> None:
@@ -164,7 +165,7 @@ def test_out_of_order_step_is_rejected(client: TestClient) -> None:
 
 
 def test_not_ready_without_a_bundle(tmp_path: Path) -> None:
-    client = TestClient(create_app(tmp_path / "missing"))
+    client = TestClient(create_app(tmp_path / "missing", api_settings()), headers=auth("write"))
     assert client.get("/ready").status_code == 503
     response = client.post("/v1/score", json=payload())
     assert response.status_code == 503
@@ -186,11 +187,8 @@ def test_openapi_documents_the_score_contract(client: TestClient) -> None:
     assert {"p_fraud", "decision", "expected_cost", "model_version"} <= set(props)
 
 
-def test_cors_allows_only_the_configured_origins(
-    bundle: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("FG_CORS_ORIGINS", "http://localhost:3000")
-    client = TestClient(create_app(bundle))
+def test_cors_allows_only_the_configured_origins(bundle: Path) -> None:
+    client = TestClient(create_app(bundle, api_settings(cors_origins="http://localhost:3000")))
     preflight = {"Access-Control-Request-Method": "POST"}
 
     ok = client.options("/v1/score", headers={"Origin": "http://localhost:3000", **preflight})
@@ -200,9 +198,8 @@ def test_cors_allows_only_the_configured_origins(
     assert "access-control-allow-origin" not in bad.headers
 
 
-def test_cors_can_be_disabled(bundle: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("FG_CORS_ORIGINS", "")
-    client = TestClient(create_app(bundle))
+def test_cors_can_be_disabled(bundle: Path) -> None:
+    client = TestClient(create_app(bundle, api_settings(cors_origins="")))
     response = client.get("/health", headers={"Origin": "http://localhost:3000"})
     assert "access-control-allow-origin" not in response.headers
 

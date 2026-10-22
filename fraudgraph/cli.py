@@ -31,6 +31,22 @@ def version() -> None:
     typer.echo(__version__)
 
 
+@app.command("api-key")
+def api_key(
+    scope: Annotated[str, typer.Option(help="read, write or admin")] = "write",
+) -> None:
+    """Make a new API key. Give the key to the client; put only the hash entry in
+    FG_API__API_KEYS (comma-separated)."""
+    from services.api.security import SCOPES, hash_key, new_key
+
+    if scope not in SCOPES:
+        typer.echo(f"error: scope must be one of {', '.join(SCOPES)}", err=True)
+        raise typer.Exit(1)
+    key = new_key()
+    typer.echo(f"key:   {key}")
+    typer.echo(f"entry: {scope}:{hash_key(key)}")
+
+
 @config_app.command("show")
 def config_show() -> None:
     """Print the effective settings (YAML + environment overrides) as JSON."""

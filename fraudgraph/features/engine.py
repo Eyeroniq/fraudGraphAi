@@ -62,19 +62,29 @@ class FeatureEngine:
         out.update(self._graph_features(ev))
         return out
 
-    def apply(self, ev: Event) -> None:
-        """Record `ev` in state. Call after scoring it."""
-        self.store.add(origin_key(ev.name_orig), ev.step, ev.amount, ev.name_dest)
-        self.store.add(dest_key(ev.name_dest), ev.step, ev.amount, ev.name_orig)
+    def apply(self, ev: Event) -> bool:
+        """Record `ev` in state. Call after scoring it. Returns False if `ev.txn_id` was
+        already applied (a retried request), so state never double-counts."""
+        return self.store.apply(
+            ev.txn_id,
+            [
+                (origin_key(ev.name_orig), ev.step, ev.amount, ev.name_dest),
+                (dest_key(ev.name_dest), ev.step, ev.amount, ev.name_orig),
+            ],
+        )
 
-    def apply_label(self, dest: str, is_fraud: bool, known_at_step: int) -> None:
+    def apply_label(
+        self, dest: str, is_fraud: bool, known_at_step: int, txn_id: str | None = None
+    ) -> None:
         """A label for a payment into `dest` became known at `known_at_step` (D4).
 
         Only confirmed fraud is stored (it is what G1-b counts). The caller is responsible
-        for the delay: in backfill, a transaction at step s is labelled at s + L.
+        for the delay: in backfill, a transaction at step s is labelled at s + L. With a
+        `txn_id`, the same label posted twice is counted once.
         """
         if is_fraud:
-            self.store.add(fraud_key(dest), known_at_step, 1.0)
+            marker = None if txn_id is None else f"label:{txn_id}"
+            self.store.apply(marker, [(fraud_key(dest), known_at_step, 1.0, None)])
 
     # ------------------------------------------------------------------ families
 

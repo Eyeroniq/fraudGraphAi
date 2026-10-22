@@ -1,12 +1,14 @@
-"""Smoke test a running API: wait for /ready, then score three fixture transactions.
+"""Smoke test a running API: wait for /ready, then score three fixture transactions and
+read one back from the decision log.
 
-Usage: python scripts/smoke_api.py http://localhost:8000
+Usage: SMOKE_API_KEY=<write key> python scripts/smoke_api.py http://localhost:8000
 Exits non-zero on any failure. Used by the CI docker-smoke job.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -24,7 +26,8 @@ EVENTS = [
 
 def call(url: str, body: dict[str, object] | None = None) -> tuple[int, dict[str, object]]:
     data = None if body is None else json.dumps(body).encode()
-    request = urllib.request.Request(url, data=data, headers={"content-type": "application/json"})
+    headers = {"content-type": "application/json", "x-api-key": os.environ.get("SMOKE_API_KEY", "")}
+    request = urllib.request.Request(url, data=data, headers=headers)
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read())
@@ -52,7 +55,15 @@ def main(base: str, timeout_s: float = 120.0) -> int:
         print(f"{event['txn_id']}: {status} {body}")
         if status != 200 or body.get("decision") not in {"APPROVE", "STEP_UP", "REVIEW", "BLOCK"}:
             return 1
-    return 0
+
+    for _ in range(10):  # the decision log is written after the response
+        status, body = call(f"{base}/v1/transactions/S2")
+        if status == 200:
+            print(f"stored: {body.get('prediction')}")
+            return 0
+        time.sleep(0.5)
+    print(f"decision not stored: {status} {body}", file=sys.stderr)
+    return 1
 
 
 if __name__ == "__main__":

@@ -14,7 +14,11 @@ so memory stays bounded by recent activity.
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Sequence
 from typing import Protocol
+
+# One write of an event: (key, step, amount, counterparty or None).
+Write = tuple[str, int, float, str | None]
 
 
 class Bucket:
@@ -54,6 +58,11 @@ class StateStore(Protocol):
 
     def add(self, key: str, step: int, amount: float, member: str | None = None) -> None:
         """Record one event of `amount` (with an optional counterparty) for `key`."""
+        ...
+
+    def apply(self, marker: str | None, writes: Sequence[Write]) -> bool:
+        """Apply `writes` as one unit. With a `marker` (e.g. the txn_id), a unit already
+        applied under the same marker is skipped and False is returned (retries)."""
         ...
 
 
@@ -100,6 +109,14 @@ class InMemoryStore:
             while buckets[0].step < oldest:
                 buckets.pop(0)
         self._last_touched[step].append(key)
+
+    def apply(self, marker: str | None, writes: Sequence[Write]) -> bool:
+        # Backfill replays each event once, so markers are not kept (memory, D4).
+        if writes and self._latest is not None and writes[0][1] < self._latest:
+            raise OutOfOrderError(f"step {writes[0][1]} arrived after step {self._latest}")
+        for key, step, amount, member in writes:
+            self.add(key, step, amount, member)
+        return True
 
     def _evict(self, now: int) -> None:
         """Drop keys whose newest bucket is older than the horizon."""
