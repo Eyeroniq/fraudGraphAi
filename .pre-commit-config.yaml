@@ -6,6 +6,11 @@ repos:
     rev: v5.0.0
     hooks:
       - id: check-yaml
+        exclude: ^deploy/docker-compose\.prod\.yml$ # Compose's !reset / !override tags
+      - id: check-yaml
+        name: check yaml (syntax only, compose overlay)
+        args: [--unsafe]
+        files: ^deploy/docker-compose\.prod\.yml$
       - id: check-toml
       - id: end-of-file-fixer
       - id: trailing-whitespace

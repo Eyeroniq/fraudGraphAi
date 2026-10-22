@@ -41,7 +41,7 @@ function Lab({ data }: { data: LabReport }) {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Kpi index={1} label="Champion AP" value={champion ? champion.ap.toFixed(3) : "—"} tip="Average precision on the test split (steps 356–408): area under the precision-recall curve. Fraud prevalence alone would score about 0.002." accent="var(--color-mint)" />
         <Kpi index={2} label="Test payments" value={count(data.sample.rows)} tip="Modelled payments (transfers and cash-outs) in the test split." sub={`${count(data.sample.fraud)} fraud`} />
-        <Kpi index={3} label="Policy cost" value={money(data.policy.policies_test["+ conformal (uncertain -> STEP_UP)"]?.cost.total)} tip="Realised cost on test of the deployed policy (expected-cost rule + step-up for uncertain payments)." />
+        <Kpi index={3} label="Policy cost" value={money(data.policy.policies_test["+ capacity 2000/day, first-come"]?.cost.total)} tip="Realised cost on test of the deployed policy: expected-cost rule, step-up for uncertain payments, 2,000 reviews a day." />
         <Glass index={4} hover as="div" className="flex flex-col justify-between p-5">
           <Tip tip="Pre-registered rule (Phase 3): graph features win only if both the AP and the cost improvement have confidence intervals above zero.">
             <span className="label-mono text-[0.62rem]">Graph verdict</span>

@@ -111,10 +111,10 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | **8.4** | Model Lab (PR/cost curves, interactive cost sliders, graph verdict) | ☑ 2026-10-22 · cost curve recomputed in the browser from the test sample (`fgx console-report`) |
 | **8.5** | Drift & Stream page (scenario injector, PSI heatmap, alarms) | ☑ 2026-10-22 · D0–D6 injector, live PSI heat map, alarms, champion vs challenger, Phase 6 study |
 | **8.6** | Explainability Quality + Model Card pages | ☑ 2026-10-22 · stability, quality vs baselines, model card with promotion; e2e + axe (WCAG AA) green on every page |
-| **9.1** | deepchecks suites as CI gates | ☐ |
-| **9.2** | Model behaviour tests (invariance, directional, floors) | ☐ |
-| **9.3** | Full CI: python, web, model-validation, docker smoke, e2e | ☐ |
-| **9.4** | Release workflow (GHCR) + production deploy behind Caddy | ☐ |
+| **9.1** | deepchecks suites as CI gates | ☑ 2026-10-23 · `fgx validate`: 3 suites, 20 conditions (deepchecks 0.19 breaks on scikit-learn 1.9, so written in-house); PaySim passes, 4 honest warnings |
+| **9.2** | Model behaviour tests (invariance, directional, floors) | ☑ 2026-10-23 · renaming accounts changes no score; unknown / known-fraud receiver never lowers risk; 93.5 % of planted rings in top 5 % |
+| **9.3** | Full CI: python, web, model-validation, docker smoke, e2e | ☑ 2026-10-23 · coverage gate ≥ 80 %, compose-stack smoke, Playwright on the live stack, full-pipeline + release workflows |
+| **9.4** | Release workflow (GHCR) + production deploy behind Caddy | ◐ 2026-10-23 · release workflow, prod overlay (auto-HTTPS Caddy), backups and runbook ready; no host or domain chosen yet |
 | **10.1** | README with results, model card, architecture diagram | ☐ |
 | **10.2** | Demo script + GIF/video, write-up | ☐ |
 
@@ -133,6 +133,7 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | 2026-10-22 | Phase 7 (7.1–7.3, 7.7): `StateStore.apply` writes one event as a unit (Lua in Redis, with the `seen:` marker); `predictions` also stores `step` for the `(decision, step)` index; `POST /v1/labels` records a label at the later of its step and the newest scored step; `/v1/models/{v}/promote` and `/v1/sim/*` exist with admin auth but answer 501 until 7.5 / 7.4; Caddy injects the web page's key. |
 | 2026-10-22 | Phase 7 (7.4–7.6, J4): the worker runs the daily-retrain policy from 6.6 with shadow challengers promoted by realised cost; the river online learner is dropped. Replayer controlled through `/v1/sim/*` (`sim_control`, migration 0002), batch labels endpoint. 7.6 load target not met on the dev laptop (p95 < 50 ms holds to 100 rps on 2 workers); measured in CI on the real stack. Rust client + FRM hook (J4). |
 | 2026-10-22 | Phase 8: console in the portfolio's glass style; hand-written SVG charts and ego-graph instead of ECharts / Cytoscape (page weight), in-app mock backend instead of MSW, axe in Playwright as the accessibility gate. Report pages read `GET /v1/models/lab` (`fgx console-report`). |
+| 2026-10-23 | Phase 9: validation gates written in-house in deepchecks' suite shape (deepchecks 0.19 fails at run time on scikit-learn 1.9 and needs a setuptools pin); ranking AP is judged on the raw score (isotonic ties lower it 0.467 → 0.415). `/api/metrics` was publicly reachable through Caddy and is now blocked. 9.4 waits on a host and a domain. |
 
 ---
 
@@ -797,6 +798,10 @@ e2e              Playwright against the compose stack (main branch + nightly)
 
 Also: `full-pipeline.yml` (manual dispatch: Kaggle secrets → full run → reports as artifacts),
 `release.yml` (on tag `v*`: build + push to GHCR, attach model card).
+
+- *As built (9.1):* `fraudgraph/validation/suites.py` + `configs/validation.yaml`; conditions are FAIL or
+  WARN like deepchecks', reports are HTML + JSON. Feature drift and weak segments warn (PaySim's
+  calendar drift and low-amount weakness are documented facts, not regressions).
 
 **9.4 Deploy** — VPS with docker compose + Caddy (automatic HTTPS) on FraudGraph's own domain
 (to be decided). Public demo mode: read-only keys in the browser, simulator controls behind the admin key, rate

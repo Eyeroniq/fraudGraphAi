@@ -100,6 +100,30 @@ Then run `npm run gen:api` in `web/`; CI fails if they drift. In `web/`, `npm te
 unit tests. `NEXT_PUBLIC_MOCK=1 npm run build && npm run e2e` runs the Playwright flow and the
 accessibility checks.
 
+## Quality gates
+
+These run on every pull request:
+
+| Gate | What it checks |
+|---|---|
+| Lint | ruff and mypy (strict). |
+| Tests | Ubuntu and Windows; coverage ≥ 80 % of `fraudgraph/`. |
+| Integration | Redis and Postgres. |
+| Model validation | `fgx validate`: data integrity, train/test validation and model evaluation conditions ([configs/validation.yaml](configs/validation.yaml)), and behaviour tests (invariance, directional, planted rings, AP floors, conformal coverage). |
+| Web | API contract, types, unit tests, e2e and accessibility. |
+| Rust client | Formatting, lints and tests. |
+| Docker smoke | The full compose stack, driven through Caddy. |
+
+On `main` and nightly, Playwright also runs against the live stack.
+
+```bash
+uv run fgx validate --fixture   # the gates on synthetic data; drop --fixture after the real pipeline
+```
+
+`full-pipeline.yml` reruns everything on PaySim. It is started by hand and needs Kaggle secrets.
+A `v*` tag publishes images to GHCR (`release.yml`). See [deploy/README.md](deploy/README.md)
+for the runbook and [docs/model_card.md](docs/model_card.md) for the model card.
+
 ## Configuration
 
 Settings come from [configs/base.yaml](configs/base.yaml). Override any value with an

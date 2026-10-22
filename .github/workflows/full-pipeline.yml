@@ -1,0 +1,61 @@
+name: full-pipeline
+
+# The whole pipeline on the real PaySim data (task 9.3). Manual: it needs Kaggle
+# credentials (repository secrets KAGGLE_USERNAME / KAGGLE_KEY) and about an hour.
+on:
+  workflow_dispatch:
+    inputs:
+      trials:
+        description: LightGBM search trials per fit
+        default: "20"
+      studies:
+        description: Also run the graph study (3.6) and the drift study (6.6)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+      KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras
+      - run: uv run fgx data download
+      - run: uv run fgx data prepare
+      - run: uv run fgx data audit
+      - run: uv run fgx split
+      - run: uv run fgx features build
+      - run: uv run fgx train baselines --trials ${{ inputs.trials }}
+      - run: uv run fgx evaluate
+      - run: uv run fgx train champion --trials ${{ inputs.trials }}
+      - run: uv run fgx policy
+      - run: uv run fgx bundle
+      - run: uv run fgx conformal
+      - run: uv run fgx explain
+      - if: inputs.studies
+        run: uv run fgx graph-study --trials ${{ inputs.trials }}
+      - if: inputs.studies
+        run: uv run fgx drift-study
+      - run: uv run fgx console-report
+      # The gates (9.1) on the real data: fails the run on any failed condition.
+      - run: uv run fgx validate
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports
+          path: reports
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle
+          path: artifacts/bundles
+          retention-days: 30

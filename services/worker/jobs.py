@@ -150,6 +150,18 @@ class Worker:
         for attempt in range(attempts):
             status, reply = self.post(path, body, "write")
             if status == 200:
+                failed = reply.get("failed", 0) if isinstance(reply, dict) else 0
+                if failed:  # per-item errors (e.g. out of order) do not fail the batch
+                    first: dict[str, Any] = next(
+                        (r for r in reply.get("results", []) if "error" in r), {}
+                    )
+                    log.warning(
+                        "%s at step %s: %s of the batch rejected (%s)",
+                        path,
+                        step,
+                        failed,
+                        first.get("error", {}).get("code", "?"),
+                    )
                 return
             if status != 429:
                 break

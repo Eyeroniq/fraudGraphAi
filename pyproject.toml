@@ -21,7 +21,7 @@ dependencies = [
     "slowapi>=0.1.9",
     "sqlalchemy>=2.0",
     "typer>=0.12",
-    "uvicorn>=0.32",
+    "uvicorn[standard]>=0.32",  # websockets for /ws/live, httptools, uvloop on Linux
     "structlog>=24.4",
     "prometheus-client>=0.21",
 ]

@@ -1,0 +1,52 @@
+# Production overlay (task 9.4): released images from GHCR instead of local builds,
+# automatic HTTPS, restart policies. See deploy/README.md for the runbook.
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.prod.yml up -d
+# FG_VERSION picks the release (e.g. v0.9.0); roll back by setting the previous tag.
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  redis:
+    <<: *restart
+
+  postgres:
+    <<: *restart
+
+  migrate:
+    image: ghcr.io/${FG_IMAGE_OWNER:-eyeroniq}/fraudgraph-api:${FG_VERSION:?set FG_VERSION in deploy/.env}
+    build: !reset null
+
+  api:
+    <<: *restart
+    image: ghcr.io/${FG_IMAGE_OWNER:-eyeroniq}/fraudgraph-api:${FG_VERSION}
+    build: !reset null
+    ports: !reset []  # only Caddy is public
+    command: ["uvicorn", "services.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+    environment:
+      FG_API__RATE_LIMIT_BATCH: "60/minute"
+
+  worker:
+    <<: *restart
+    image: ghcr.io/${FG_IMAGE_OWNER:-eyeroniq}/fraudgraph-worker:${FG_VERSION}
+    build: !reset null
+
+  web:
+    <<: *restart
+    image: ghcr.io/${FG_IMAGE_OWNER:-eyeroniq}/fraudgraph-web:${FG_VERSION}
+    build: !reset null
+    ports: !override
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"  # HTTP/3
+    environment:
+      FG_DOMAIN: ${FG_DOMAIN:?set FG_DOMAIN in deploy/.env}
+      FG_ACME_EMAIL: ${FG_ACME_EMAIL:?set FG_ACME_EMAIL in deploy/.env}
+    volumes:
+      - ./Caddyfile.prod:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data  # certificates survive restarts
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

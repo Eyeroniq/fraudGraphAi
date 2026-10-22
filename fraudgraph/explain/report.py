@@ -178,7 +178,8 @@ def write_plots(
     fig.savefig(out / "global_groups.png", dpi=110)
 
     features = booster.feature_name()
-    test = table.filter(pl.col("split") == "test").sample(n=min(20_000, table.height), seed=0)
+    test = table.filter(pl.col("split") == "test")
+    test = test.sample(n=min(20_000, test.height), seed=0)  # cap at the test split's size
     x = frame_to_matrix(test, features, horizon)
     c = contributions(booster, x)[0]
     top = report["top_features"]

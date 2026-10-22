@@ -27,6 +27,17 @@ from fraudgraph.models.bundle import write_bundle
 from fraudgraph.models.calibrate import fit_calibrator
 
 
+def _graph_features() -> list[str]:
+    from fraudgraph.features.engine import FeatureEngine
+    from fraudgraph.features.state import InMemoryStore
+
+    spec = FeatureSpec()
+    return list(FeatureEngine(spec, InMemoryStore(spec.horizon_steps)).feature_names)
+
+
+GRAPH_FEATURES = _graph_features()
+
+
 def build_bundle(
     events: pl.DataFrame,
     out_root: Path,
@@ -39,6 +50,7 @@ def build_bundle(
     alpha: float = 0.1,
     review_capacity_per_day: int | None = None,
     model_name: str = "lgbm",
+    feature_names: list[str] | None = None,
     git_sha: str = "fixture",
     data_sha256: str = "fixture",
 ) -> Path:
@@ -50,7 +62,7 @@ def build_bundle(
         s: table.filter(pl.col("split") == s)
         for s in ("train_fit", "train_val", "calib_a", "calib_b")
     }
-    names = feature_sets(table)["" if model_name == "lgbm" else "_no_hour"]
+    names = feature_names or feature_sets(table)["" if model_name == "lgbm" else "_no_hour"]
     x = {s: matrix(t, names, spec.horizon_steps) for s, t in parts.items()}
     y = {s: labels(t) for s, t in parts.items()}
 
@@ -123,8 +135,17 @@ def build_bundle(
     )
 
 
-def fixture_bundle(out_root: Path, *, seed: int = 7, trials: int = 3) -> Path:
-    """Build a bundle from the synthetic fixture (its dense period ends before the sparse days)."""
+def fixture_bundle(
+    out_root: Path,
+    *,
+    seed: int = 7,
+    trials: int = 3,
+    graph: bool = False,
+) -> Path:
+    """Build a bundle from the synthetic fixture (its dense period ends before the sparse days).
+
+    `graph=True` adds the engine's graph features (T+O+G1), like the champion, for tests
+    that need destination novelty and known-fraud neighbours (9.2)."""
     cfg = SynthConfig(seed=seed)
     events = to_canonical(generate(cfg).frame)
     return build_bundle(
@@ -134,4 +155,6 @@ def fixture_bundle(out_root: Path, *, seed: int = 7, trials: int = 3) -> Path:
         label_delay_steps=12,
         costs=CostParams(c_review=2_000.0, c_friction=20_000.0, step_up_enabled=True),
         trials=trials,
+        model_name="lgbm_graph" if graph else "lgbm",
+        feature_names=GRAPH_FEATURES if graph else None,
     )

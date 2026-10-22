@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "17 2 * * *" # nightly: stack e2e on main
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -38,8 +41,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Linux matches the Docker images; Windows is the main dev platform.
-        os: [ubuntu-latest, windows-latest]
+        # Linux matches the Docker images and owns the coverage gate (>= 80 % of
+        # fraudgraph/); Windows, the main dev platform, skips the slower model tests.
+        include:
+          - os: ubuntu-latest
+            pytest: --cov --cov-report=term-missing:skip-covered --cov-fail-under=80
+          - os: windows-latest
+            pytest: -m "not model"
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -47,7 +55,30 @@ jobs:
           enable-cache: true
       - run: uv sync --all-extras
       # Unit tests run on the synthetic fixture only; CI never needs the real dataset (D10).
-      - run: uv run pytest --cov --cov-report=term-missing:skip-covered
+      - run: uv run pytest ${{ matrix.pytest }}
+
+  model-validation:
+    name: model validation (gates, behaviour, bundle)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras
+      # 9.1: data integrity, train/test validation and model evaluation; exits 1 on a failed condition.
+      - run: uv run fgx validate --fixture --out reports/validation/fixture
+      # 9.2: invariance, directional, minimum functionality, floors, conformal coverage.
+      - run: uv run pytest tests/model/test_behaviour.py
+      - run: uv run fgx all --fixture --out artifacts/bundles
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-reports
+          path: |
+            reports/validation
+            artifacts/bundles/*/manifest.json
+          retention-days: 30
 
   integration:
     name: integration (redis, postgres)
@@ -138,67 +169,69 @@ jobs:
       - run: cargo test
 
   docker-smoke:
-    name: docker smoke (api image, redis, postgres)
+    name: docker smoke (compose stack)
     runs-on: ubuntu-latest
     needs: [test]
-    services:
-      redis:
-        image: redis:7.4-alpine
-        ports: ["6379:6379"]
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: fg
-          POSTGRES_PASSWORD: fg
-          POSTGRES_DB: fg
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U fg" --health-interval 5s --health-timeout 3s --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
       - run: uv sync --all-extras
-      # A bundle from the synthetic data: CI never needs the real dataset (D10).
-      - run: uv run fgx all --fixture --out artifacts/bundles
-      - run: docker build -f docker/api.Dockerfile -t fraudgraph-api:ci .
-      - name: api key for the smoke test
-        run: |
-          out=$(uv run fgx api-key --scope write)
-          key=$(echo "$out" | sed -n 's/^key: *//p')
-          echo "::add-mask::$key"
-          echo "SMOKE_API_KEY=$key" >> "$GITHUB_ENV"
-          echo "FG_API__API_KEYS=$(echo "$out" | sed -n 's/^entry: *//p')" >> "$GITHUB_ENV"
-      - name: migrate and start the api (2 workers) against redis and postgres
-        env:
-          FG_API__DATABASE_URL: postgresql+psycopg://fg:fg@localhost:5432/fg
-          FG_API__REDIS_URL: redis://localhost:6379/0
-          FG_API__RATE_LIMIT_SCORE: 1000000/minute  # the load test below
-        run: |
-          docker run --rm --network host -e FG_API__DATABASE_URL fraudgraph-api:ci alembic upgrade head
-          docker run -d --name api --network host -e FG_API__DATABASE_URL -e FG_API__REDIS_URL \
-            -e FG_API__API_KEYS -e FG_API__RATE_LIMIT_SCORE \
-            -v "$PWD/artifacts:/app/artifacts:ro" fraudgraph-api:ci \
-            uvicorn services.api.main:app --host 0.0.0.0 --port 8000 --workers 2
-      - run: uv run python scripts/smoke_api.py http://localhost:8000
-      - name: metrics endpoint
+      # api, worker and web images, Redis, Postgres, migrations, Caddy: the whole stack.
+      - run: deploy/ci-stack.sh
+      # Through Caddy as the browser: page, ready, metrics hidden, score, case, resolve, label.
+      - run: uv run python scripts/smoke_stack.py http://localhost:8080
+      - name: metrics on the internal port
         run: curl -fsS http://localhost:8000/metrics | grep -q fraudgraph_decisions_total
-      - name: one worker tick against postgres (monitors, retrain, judge)
-        run: |
-          docker build -f docker/api.Dockerfile --build-arg EXTRAS="--extra worker" -t fraudgraph-worker:ci .
-          docker run --rm --network host \
-            -e FG_API__DATABASE_URL=postgresql+psycopg://fg:fg@localhost:5432/fg \
-            -v "$PWD/artifacts:/app/artifacts" fraudgraph-worker:ci \
-            python -m services.worker.main --once
+      - name: worker is running
+        run: docker compose -f deploy/docker-compose.yml logs worker | grep -q "worker started"
       # Reported, not gating: the target (p95 < 50 ms at 200 rps on 2 workers, 7.6) is for
       # the deployment host; a shared CI runner also runs the load generator.
       - name: load test (200 rps, 30 s)
         continue-on-error: true
         run: |
           uv run python scripts/load_test.py --base http://localhost:8000 \
-            --key "$SMOKE_API_KEY" --rps 200 --seconds 30 --p95-ms 50 | tee load_test.json
+            --key "$STACK_WRITE_KEY" --rps 200 --seconds 30 --p95-ms 50 | tee load_test.json
           echo '```json' >> "$GITHUB_STEP_SUMMARY"; cat load_test.json >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - name: production overlay is valid
+        env:
+          FG_VERSION: ci
+          FG_DOMAIN: fraudgraph.example
+          FG_ACME_EMAIL: ops@fraudgraph.example
+        run: docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.prod.yml config --quiet
       - if: failure()
-        run: docker logs api
+        run: docker compose -f deploy/docker-compose.yml logs --tail 200
+
+  e2e:
+    name: e2e (Playwright against the stack)
+    runs-on: ubuntu-latest
+    needs: [docker-smoke, web]
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: uv sync --all-extras
+      - run: deploy/ci-stack.sh
+      - name: console flow on the live stack
+        working-directory: web
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+          npx playwright test -c playwright.stack.config.ts
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stack-e2e-traces
+          path: web/test-results
+          retention-days: 7
+      - if: failure()
+        run: docker compose -f deploy/docker-compose.yml logs --tail 200

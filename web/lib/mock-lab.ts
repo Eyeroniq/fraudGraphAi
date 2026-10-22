@@ -75,7 +75,8 @@ export function lab(): LabReport {
         global_threshold: policy(153.8e6, 0.029),
         "expected_cost (3 actions)": policy(71.3e6, 0.012),
         "expected_cost + step_up": policy(59.8e6, 0.01),
-        "+ conformal (uncertain -> STEP_UP)": policy(66.3e6, 0.011),
+        "+ conformal (uncertain -> STEP_UP)": policy(71.2e6, 0.011),
+        "+ capacity 2000/day, first-come": policy(66.3e6, 0.0134),
       },
       coverage_grid: [0.01, 0.05, 0.1, 0.2, 0.3].map((alpha) => ({
         score: "lac",

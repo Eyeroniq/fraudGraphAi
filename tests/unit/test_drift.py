@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import lightgbm as lgb
 import numpy as np
 import polars as pl
@@ -243,3 +245,17 @@ def test_tuning_quiets_the_performance_monitor_on_the_null_stream() -> None:
     alarms = study.run_performance_monitor(stream, tuned).alarms
     assert sum(a["detector"] == "page_hinkley" for a in alarms) <= 1
     assert sum(a["detector"] == "adwin" for a in alarms) <= 1
+
+
+def test_evidently_psi_agrees_with_ours_on_a_shift(tmp_path: Path) -> None:
+    from fraudgraph.drift import evidently_reports
+
+    rng = np.random.default_rng(5)
+    reference = {"same": rng.normal(size=2_000), "moved": rng.normal(size=2_000)}
+    current = {"same": rng.normal(size=2_000), "moved": rng.normal(1.5, 1.0, size=2_000)}
+    theirs = evidently_reports.drift_report(reference, current, tmp_path / "report")
+    assert (tmp_path / "report.html").is_file()
+    assert theirs["moved"] > 0.2 > theirs["same"]
+    agreement = evidently_reports.compare({"same": 0.01, "moved": 1.0}, theirs)
+    assert agreement["features"] == 2
+    assert agreement["both_above_0.2"] == 1

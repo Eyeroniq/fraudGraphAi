@@ -1,0 +1,18 @@
+# Conditions of `fgx validate` (task 9.1). Floors sit below the measured values with a
+# margin, so a real regression fails the gate and run-to-run noise does not.
+fixture:
+  # Synthetic data: 0.68 test AP; its sparse test days carry 6.8 % fraud, so lift is ~10x.
+  ap_floor: 0.5
+  min_lift: 5.0
+full:
+  ap_floor: 0.3
+  min_lift: 10.0
+# Behaviour tests (task 9.2, tests/model/). Measured on the fixture when recorded:
+# plain bundle test AP 0.801, graph bundle 0.876; 93.5 % of planted ring payments in the
+# top 5 % of scores; conformal coverage at alpha 0.1: fraud 1.0, legit 0.978.
+behaviour:
+  fixture_ap_floor: 0.7
+  fixture_champion_ap: 0.801   # the shipped fixture model; a new model may not fall below
+  ap_tolerance: 0.05           #   fixture_champion_ap - ap_tolerance
+  ring_top_share: 0.8          # share of planted ring payments in the top 5 % of scores
+  coverage_tolerance: 0.1      # |coverage - (1 - alpha)| per class

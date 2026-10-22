@@ -830,6 +830,110 @@ def drift_study_cmd(
     typer.echo(f"{path}")
 
 
+@app.command("validate")
+def validate_cmd(
+    fixture: Annotated[
+        bool, typer.Option(help="Validate a bundle built from the synthetic fixture (CI).")
+    ] = False,
+    out: Annotated[Path | None, typer.Option(help="Report directory.")] = None,
+    profile: Annotated[
+        str | None, typer.Option(help="Thresholds from configs/validation.yaml (fixture | full).")
+    ] = None,
+) -> None:
+    """Task 9.1: data integrity, train/test validation and model evaluation gates.
+
+    Exits 1 if any FAIL condition is not met (warnings are reported only)."""
+    import tempfile
+
+    import polars as pl
+    import yaml
+
+    from fraudgraph.config import REPO_ROOT
+    from fraudgraph.serving.scorer import BundleModel
+    from fraudgraph.validation import suites as v
+
+    settings = get_settings()
+    limits_cfg = yaml.safe_load(
+        (REPO_ROOT / "configs" / "validation.yaml").read_text(encoding="utf-8")
+    )
+    limits = v.Limits(**limits_cfg[profile or ("fixture" if fixture else "full")])
+    if fixture:
+        from fraudgraph.config import SplitSettings
+        from fraudgraph.data.prepare import to_canonical
+        from fraudgraph.data.splits import plan_splits
+        from fraudgraph.data.synth import SynthConfig, generate
+        from fraudgraph.features.backfill import backfill
+        from fraudgraph.features.spec import FeatureSpec
+        from fraudgraph.pipeline import fixture_bundle
+
+        cfg = SynthConfig()
+        events = to_canonical(generate(cfg).frame)
+        table, _ = backfill(events, FeatureSpec())
+        plan = plan_splits(
+            events, SplitSettings(dense_last_step=(cfg.days - cfg.sparse_days) * 24), 12
+        )
+        bundle_dir = fixture_bundle(Path(tempfile.mkdtemp()) / "bundles", trials=2)
+        champion = None
+        title = "FraudGraph validation (synthetic fixture)"
+    else:
+        from fraudgraph.data.prepare import PARQUET_NAME
+        from fraudgraph.data.splits import load_plan
+
+        data = settings.paths.data_dir
+        events = pl.read_parquet(data / "processed" / PARQUET_NAME)
+        table = pl.read_parquet(data / "features" / "tabular.parquet")
+        plan = load_plan(data / "processed" / "splits.json")
+        champion = settings.champion
+        bundles = sorted(
+            (
+                p.parent
+                for p in (settings.paths.artifacts_dir / "bundles").glob(
+                    f"{champion}-*/manifest.json"
+                )
+            ),
+            key=lambda p: json.loads((p / "manifest.json").read_text(encoding="utf-8"))[
+                "created_at"
+            ],
+        )
+        if not bundles:
+            typer.echo(f"error: no bundle for champion {champion}; run `fgx bundle`", err=True)
+            raise typer.Exit(2)
+        bundle_dir = bundles[-1]
+        title = f"FraudGraph validation ({bundle_dir.name})"
+
+    from fraudgraph.data.splits import assign_split
+
+    model = BundleModel(bundle_dir)
+    if "type" not in table.columns:
+        table = table.join(events.select("txn_id", "type"), on="txn_id", how="left")
+    table = assign_split(table, plan)
+    train = table.filter(pl.col("split") == "train_fit")
+    test = table.filter(pl.col("split") == "test")
+    amount = test.join(events.select("txn_id", "amount"), on="txn_id", how="left")[
+        "amount"
+    ].to_numpy()
+    suites = {
+        "data_integrity": v.data_integrity(events, table, model.features, limits),
+        "train_test_validation": v.train_test_validation(
+            train, test, model.features, plan.label_delay_steps, limits
+        ),
+        "model_evaluation": v.model_evaluation(model, test, amount, limits, champion),
+    }
+    summary = v.summarise(suites)
+    target = out or settings.paths.reports_dir / "validation" / ("fixture" if fixture else "full")
+    _, html_path = v.write_reports(summary, target, title)
+    for suite, checks in suites.items():
+        typer.echo(suite)
+        for c in checks:
+            typer.echo(
+                f"  {c.status.upper():4}  {c.name}: {json.dumps(c.value, default=str)[:120]}"
+            )
+    c = summary["counts"]
+    typer.echo(f"{c['pass']} passed, {c['warn']} warnings, {c['fail']} failed -> {html_path}")
+    if not summary["passed"]:
+        raise typer.Exit(1)
+
+
 @app.command("console-report")
 def console_report_cmd() -> None:
     """Phase 8: condense eval, policy, explain and drift reports for the web console."""
