@@ -92,12 +92,12 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | **5.1** | SHAP TreeExplainer + grouped reason codes | ☑ 2026-10-21 · `pred_contrib` = shap exactly; top-3 templated reasons in the API |
 | **5.2** | Stability: seed, perturbation, background sensitivity | ☑ 2026-10-21 · median top-3 Jaccard 1.0 (75 % ≥ 0.8); `explanation_stable` flag |
 | **5.3** | Quantus: robustness, faithfulness, randomisation | ☑ 2026-10-21 · faithfulness SHAP 0.64 vs permutation 0.34 vs random 0.01 ([explain_quality](docs/explain_quality.md)) |
-| **6.1** | Stream replayer with delayed labels | ☐ |
-| **6.2** | Drift scenario library (D0–D5) | ☐ |
-| **6.3** | river online models + prequential evaluation | ☐ |
-| **6.4** | Own PSI/KS/χ² monitor + ADWIN performance monitor | ☐ |
-| **6.5** | Evidently reports | ☐ |
-| **6.6** | Retraining policy experiment (static vs online vs triggered) | ☐ |
+| **6.1** | Stream replayer with delayed labels | ☑ 2026-10-22 · labels 24 ± 6 steps late, 10 % never; same schedule in process and in `services/replayer` |
+| **6.2** | Drift scenario library (D0–D6) | ☑ 2026-10-22 · 7 raw-event transforms, sudden or gradual; D6 = UPI mule VPAs (J2) |
+| **6.3** | river online models + prequential evaluation | ☑ 2026-10-22 · best catch of injected mules (75–78 % in top 1 %) but highest cost everywhere |
+| **6.4** | Own PSI/KS/χ² monitor + ADWIN performance monitor | ☑ 2026-10-22 · labels catch D1/D2/D3/D6 in 25–36 steps, quiet on D0/D4/D5; inputs see only D5 |
+| **6.5** | Evidently reports | ☑ 2026-10-22 · PSI per feature agrees with ours (Spearman 0.85, same features above 0.2); HTML + JSON per run |
+| **6.6** | Retraining policy experiment (static vs online vs triggered) | ☑ 2026-10-22 · daily sliding retrain lowest cost on all 7 scenarios ([drift_study](docs/drift_study.md)) |
 | **7.1** | Redis-backed feature state | ☐ |
 | **7.2** | Postgres decision log, review cases, labels (SQLAlchemy + Alembic) | ☐ |
 | **7.3** | Full API: batch, explain, cases, labels, monitoring, models, WebSocket | ☐ |
@@ -129,6 +129,7 @@ Legend: ☐ open · ◐ in progress · ☑ done (add date + key metric when tick
 | 2026-10-21 | Graph study: E1 (T+O+G1) wins by the pre-registered rule; GNN (E3) loses and the hybrid (E2) adds no robust gain beyond G1; E1 fails on injected mule rings (E4). Champion candidate for 7.5: E1 without G1-b (servable before `/v1/labels`). |
 | 2026-10-21 | Phase 4: champion is `lgbm_g1` (graph features, no G1-b); STEP_UP action added (Juspay J3); conformal defaults α = 0.2, uncertain → STEP_UP, 2,000 reviews/day; Juspay track J1–J4 added. |
 | 2026-10-21 | Phase 5: reason codes from LightGBM TreeSHAP, one DEST_HISTORY group (the first design gave duplicate near-tied reasons); faithfulness and model randomisation implemented directly, the other Quantus metrics used as is. |
+| 2026-10-22 | Phase 6: daily sliding retrain is the policy for 7.4 (lowest cost on all of D0–D6); monitors alert, they do not trigger retrains. Drift monitors use day-long windows and a stream-start reference on the model matrix; D6 (UPI mule VPAs, J2) added. |
 
 ---
 
@@ -699,6 +700,7 @@ FeatureEngine**, so features see the drift the way production would. Keep raw fi
 | D3 | **mule ring**: new destination accounts receive from many senders in bursts | new pattern | graph features + performance |
 | D4 | benign inflation: legit amounts +30 % | covariate only | input PSI fires, performance stable (*drift ≠ damage*) |
 | D5 | volume surge ×3 | covariate | input + prediction drift, capacity pressure |
+| D6 | **UPI mule VPAs** (J2): new mule accounts collect many small P2P transfers, then cash out | new pattern | graph features + performance |
 
 **6.3 river online models** (`online/river_models.py`)
 - Candidates: `LogisticRegression` + `StandardScaler`; `ARFClassifier` (ADWIN built in); `HoeffdingAdaptiveTreeClassifier`. Handle imbalance with `river.imblearn.RandomUnderSampler` / class weights. Inputs are the same FeatureEngine features as the batch models.
@@ -713,6 +715,10 @@ FeatureEngine**, so features see the drift the way production would. Keep raw fi
   a null stream. Build D0 from the stable period only (or a within-day shuffle of it), and report the
   natural late-period shift separately — do not tune the detectors until they stop seeing it.
 - Unit tests: PSI and KS against hand-computed values; PSI = 0 for identical inputs.
+- *As built:* monitor windows are one day (24 steps; 12-step windows read the hour-of-day cycle as
+  drift), and the reference is the stream's first two days on the **model matrix** (NaN "no history"
+  values already filled). A train_fit reference already reads PSI ≈ 1 on destination-volume features
+  at step 261, and binning raw NaNs against filled values gave a spurious PSI of 18.
 
 **6.5 Evidently** — daily `Report` (data drift + classification metrics) saved as HTML/JSON, cross-checked against our own PSI numbers (should broadly agree; document differences in binning).
 
@@ -721,7 +727,7 @@ Compare on each scenario: **(a)** static LightGBM · **(b)** river online · **(
 sliding window every N steps · **(d)** LightGBM retrained when an alarm fires · **(e)** champion + river
 challenger in shadow.
 Report: detection delay, false alarms, rolling AP/cost, time-to-recover, compute cost.
-*Done when:* a results table across D0–D5 × (a–e) and one recommended policy, which is then what the worker does.
+*Done when:* a results table across D0–D6 × (a–e) and one recommended policy, which is then what the worker does.
 
 ## Phase 7 — Production backend
 
@@ -795,7 +801,7 @@ lands in the phase where it belongs.
 | ID | Item | Phase | Status |
 |---|---|---|---|
 | **J1** | Framing: a pre-authorisation risk hook for a payment switch; latency first; costs read as ₹ | README, docs | ☑ 2026-10-21 |
-| **J2** | UPI-style scenario: VPA-like accounts, P2P / P2M / collect-request flows, mule VPAs receiving many small transfers then cashing out — check whether the destination features catch them | 6.2 (scenario D6) | ☐ |
+| **J2** | UPI-style scenario: VPA-like accounts, P2P / P2M / collect-request flows, mule VPAs receiving many small transfers then cashing out — check whether the destination features catch them | 6.2 (scenario D6) | ☑ 2026-10-22 · static catches 16 % of mule payments in its top 1 %, daily retrain 65 % |
 | **J3** | `STEP_UP` action (OTP / 3DS challenge) between APPROVE and REVIEW | 4.2 | ☑ 2026-10-21 · EC rule 71.3 M → 59.8 M |
 | **J4** | Rust client for `/v1/score` + a demo of calling it from a Hyperswitch-style fraud-risk (FRM) hook | 7.3 | ☐ |
 

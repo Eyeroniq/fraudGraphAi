@@ -22,10 +22,12 @@ dependencies = [
 [project.optional-dependencies]
 research = [
     "alembic>=1.13",
+    "evidently>=0.7",
     "mapie>=1.0",
     "matplotlib>=3.9",
     "mlflow-skinny>=2.17",
     "quantus>=0.5",
+    "river>=0.21",
     "shap>=0.46",
     "sqlalchemy>=2.0",
     "torch>=2.4",
@@ -144,6 +146,6 @@ explicit = true
 torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
 
 [[tool.mypy.overrides]]
-module = ["quantus", "quantus.*", "shap", "shap.*", "scipy", "scipy.*"]
+module = ["quantus", "quantus.*", "shap", "shap.*", "scipy", "scipy.*", "evidently", "evidently.*", "pandas", "pandas.*"]
 ignore_missing_imports = true
 follow_imports = "skip"

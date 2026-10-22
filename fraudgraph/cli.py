@@ -707,6 +707,113 @@ def explain_cmd(
         typer.echo(f"{method:<12} {line}")
 
 
+@app.command("drift-study")
+def drift_study_cmd(
+    only: Annotated[str | None, typer.Option(help="Comma-separated scenario ids.")] = None,
+    resume: Annotated[
+        bool, typer.Option(help="Reuse finished scenarios from reports/drift/scenarios/.")
+    ] = False,
+) -> None:
+    """Phase 6: drift scenarios x retraining policies -> reports/drift/study.json."""
+    import lightgbm as lgb
+    import polars as pl
+
+    from fraudgraph.config import REPO_ROOT
+    from fraudgraph.data.prepare import PARQUET_NAME
+    from fraudgraph.decision.costs import CostParams
+    from fraudgraph.drift import evidently_reports
+    from fraudgraph.drift.psi_ks import InputDriftMonitor
+    from fraudgraph.drift.scenarios import load_scenarios
+    from fraudgraph.online import study
+    from fraudgraph.online.replay import LabelConfig
+    from fraudgraph.tracking import tracked_run
+
+    settings = get_settings()
+    data, arts = settings.paths.data_dir, settings.paths.artifacts_dir
+    out = settings.paths.reports_dir / "drift"
+    cache = out / "scenarios"
+    cache.mkdir(parents=True, exist_ok=True)
+    booster = lgb.Booster(model_file=str(arts / "baselines" / f"{settings.champion}.txt"))
+    features = booster.feature_name()
+    events = pl.read_parquet(data / "processed" / PARQUET_NAME)
+    clean = pl.read_parquet(data / "features" / "tabular.parquet")
+    costs = CostParams(**settings.costs.model_dump())
+    cfg, labels = study.StudyConfig(seed=settings.seed), LabelConfig(seed=settings.seed)
+    scenarios = load_scenarios(REPO_ROOT / "configs" / "drift_scenarios.yaml")
+    wanted = None if only is None else {s.strip() for s in only.split(",")}
+
+    typer.echo("warm-starting the river learner")
+    river_seed = study.warm_river(clean, features, cfg)
+    d0 = next(s for s in scenarios if s.kind == "none")
+    typer.echo("D0 (tuning pass)")
+    tuning_path = cache / "D0_tuning.json"
+    if resume and tuning_path.exists():
+        first = json.loads(tuning_path.read_text(encoding="utf-8"))
+    else:
+        first = study.run_scenario(
+            events, d0, booster, river_seed, costs, cfg, study.Thresholds(), labels
+        )
+        first.pop("_samples")
+        tuning_path.write_text(json.dumps(first, default=float), encoding="utf-8")
+    thresholds = study.tune_on_d0(first)
+    typer.echo(f"tuned thresholds: {thresholds}")
+
+    results, evid = [], {}
+    for sc in scenarios:
+        if wanted is not None and sc.id not in wanted and sc.kind != "none":
+            continue
+        typer.echo(f"{sc.id} ({sc.kind}, {sc.mode})")
+        done = cache / f"{sc.id}.json"
+        if resume and done.exists():
+            r = json.loads(done.read_text(encoding="utf-8"))
+            if "evidently" in r:
+                evid[sc.id] = r.pop("evidently")
+            results.append(r)
+            continue
+        r = study.run_scenario(events, sc, booster, river_seed, costs, cfg, thresholds, labels)
+        samples = r.pop("_samples")
+        if sc.id in ("D0", "D4"):
+            ours = InputDriftMonitor(
+                samples["reference_stats"],
+                samples["reference"],
+                psi_alarm=thresholds.input_psi,
+            ).evaluate(samples["post"])
+            evidently_psi = evidently_reports.drift_report(
+                samples["reference"], samples["post"], out / "evidently" / f"{sc.id}_post"
+            )
+            evid[sc.id] = evidently_reports.compare(
+                {row["feature"]: row["psi"] for row in ours["features"]}, evidently_psi
+            )
+        cached = {**r, "evidently": evid[sc.id]} if sc.id in evid else r
+        done.write_text(json.dumps(cached, default=float), encoding="utf-8")
+        results.append(r)
+        p = r["policies"]
+        typer.echo(
+            "   "
+            + "  ".join(
+                f"{n} {p[n]['ap_post']:.3f}/{p[n]['cost_post'] / 1e6:.0f}M" for n in study.POLICIES
+            )
+            + f"  detect {r['detection']}"
+        )
+    late = study.natural_late_period(clean, booster, thresholds)
+    report = {
+        "config": cfg.__dict__,
+        "labels": labels.__dict__,
+        "thresholds": thresholds.__dict__,
+        "d0_tuning_pass": first,
+        "scenarios": results,
+        "natural_late_period": late,
+        "evidently_vs_ours": evid,
+    }
+    path = out / "study.json"
+    path.write_text(json.dumps(report, indent=2, default=float) + "\n", encoding="utf-8")
+    study.write_plots(report, out)
+    with tracked_run("drift-study", data_sha256=_data_sha256(), task="6") as tracker:
+        tracker.params(thresholds.__dict__)
+        tracker.artifact(path)
+    typer.echo(f"{path}")
+
+
 @app.command("split")
 def split() -> None:
     """Choose time-based splits with the label-delay embargo -> data/processed/splits.json."""

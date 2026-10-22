@@ -1,0 +1,33 @@
+# Drift scenarios for the Phase 6 study (fraudgraph/drift/scenarios.py).
+# The stream is steps 261-408 (after the champion's training window, inside the dense
+# period); drift starts at step 330, leaving ~3 days before and after.
+defaults:
+  start_step: 330
+  end_step: 408
+  mode: sudden
+  ramp_steps: 24
+  seed: 7
+
+scenarios:
+  - id: D0
+    kind: none
+  - id: D1
+    kind: small_ticket_fraud
+    params: {factor: [0.02, 0.1]}
+  - id: D2
+    kind: channel_shift
+    mode: gradual
+    params: {legit_share: 0.3}
+  - id: D3
+    kind: mule_ring
+    params: {rings: 40, destinations_per_ring: 3, senders_per_destination: 15, burst_steps: 6}
+  - id: D4
+    kind: benign_inflation
+    params: {factor: 1.3}
+  - id: D5
+    kind: volume_surge
+    params: {extra_copies: 2}
+  - id: D6
+    kind: upi_mule_vpas
+    mode: gradual
+    params: {mules: 60, senders_per_mule: 25, burst_steps: 12, median_amount: 5000}
