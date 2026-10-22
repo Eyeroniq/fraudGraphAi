@@ -15,7 +15,7 @@ import datetime as dt
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar, Literal, cast
 
 from sqlalchemy import (
     JSON,
@@ -26,6 +26,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Table,
     create_engine,
     func,
     or_,
@@ -170,13 +171,18 @@ def make_engine(url: str | None) -> Engine:
 
 
 def _insert(session: Session, model: type[Base], rows: list[dict[str, Any]]) -> int:
-    """INSERT ... ON CONFLICT DO NOTHING; returns the number of rows written."""
+    """INSERT ... ON CONFLICT DO NOTHING; returns the number of rows written.
+
+    Rows are counted from RETURNING, not `rowcount`: on Postgres a multi-row insert can
+    run in SQLAlchemy's "insertmanyvalues" mode, where `rowcount` is not reliable.
+    """
     if not rows:
         return 0
     dialect = session.get_bind().dialect.name
     insert = postgresql.insert if dialect == "postgresql" else sqlite.insert
-    stmt = insert(model).values(rows).on_conflict_do_nothing()
-    return int(session.execute(stmt).rowcount or 0)  # type: ignore[attr-defined]
+    table = cast(Table, model.__table__)
+    stmt = insert(table).values(rows).on_conflict_do_nothing().returning(*table.primary_key.columns)
+    return len(session.execute(stmt).all())
 
 
 def _json_safe(features: dict[str, float]) -> dict[str, float | None]:
