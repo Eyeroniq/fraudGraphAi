@@ -1,6 +1,7 @@
 # Data and generated outputs
 /data/
 /artifacts/
+/artifacts-ci/
 /reports/*
 !/reports/figures/
 /mlruns/
